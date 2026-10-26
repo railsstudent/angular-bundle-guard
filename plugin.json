@@ -1,0 +1,5 @@
+{
+  "name": "angular-bundle-guard",
+  "version": "1.0.0",
+  "description": "Audit Angular initial bundle size (main.js, vendor chunks, initial total) and lazy chunks, diagnose 8 eager-loading leak vectors, and optimize Tailwind CSS v4 and component .css styles."
+}
