@@ -40,32 +40,75 @@ export function isEligibleForHtmlMove({ className, utilities, state }) {
   return !state.findFileLineRefs(className, tsFiles) && !isDynamicallyBoundInHtml(className, htmlFiles);
 }
 
-function evaluateHtmlClassCounts({ className, isFullMove, moveCount, htmlFiles }) {
-  const inlineableRefs = [];
-  let hasExceedingUsage = false;
-
-  for (const f of htmlFiles) {
-    const fileLines = f.content.split('\n');
-    const matchedLines = [];
-    for (let idx = 0; idx < fileLines.length; idx = idx + 1) {
-      const line = fileLines[idx];
-      for (const match of line.matchAll(/(?<!\[)\bclass\s*=\s*"([^"]*)"/g)) {
-        const classes = match[1].trim().split(/\s+/).filter(Boolean);
-        if (classes.includes(className)) {
-          const countAfterMove = (isFullMove ? classes.length - 1 : classes.length) + moveCount;
-          if (countAfterMove <= 3) {
-            matchedLines.push(idx + 1);
-          } else {
-            hasExceedingUsage = true;
-          }
-        }
+function inspectLineClassUsage(line, { className, isFullMove, moveCount }) {
+  let matched = false;
+  let fits = false;
+  let maxClasses = 0;
+  for (const match of line.matchAll(/(?<!\[)\bclass\s*=\s*"([^"]*)"/g)) {
+    const classes = match[1].trim().split(/\s+/).filter(Boolean);
+    if (classes.includes(className)) {
+      matched = true;
+      maxClasses = Math.max(maxClasses, classes.length);
+      const countAfterMove = (isFullMove ? classes.length - 1 : classes.length) + moveCount;
+      if (countAfterMove <= 3) {
+        fits = true;
       }
     }
-    if (matchedLines.length > 0) {
-      inlineableRefs.push(`${path.relative(rootDir, f.file)}:${matchedLines.join(',')}`);
+  }
+  return { matched, fits, maxClasses };
+}
+
+function scanHtmlFileForClass(fileObj, options) {
+  const fileLines = fileObj.content.split('\n');
+  const fitLines = [];
+  const matchedLines = [];
+  let maxClasses = 0;
+  let hasExceeding = false;
+  for (let idx = 0; idx < fileLines.length; idx = idx + 1) {
+    const res = inspectLineClassUsage(fileLines[idx], options);
+    if (res.matched) {
+      matchedLines.push(idx + 1);
+      maxClasses = Math.max(maxClasses, res.maxClasses);
+      if (res.fits) {
+        fitLines.push(idx + 1);
+      } else {
+        hasExceeding = true;
+      }
     }
   }
-  return { inlineableHtmlLocations: inlineableRefs.join(', '), hasExceedingUsage };
+  const relFile = path.relative(rootDir, fileObj.file);
+  return {
+    fitRef: fitLines.length > 0 ? `${relFile}:${fitLines.join(',')}` : '',
+    allRef: matchedLines.length > 0 ? `${relFile}:${matchedLines.join(',')}` : '',
+    maxClasses,
+    hasExceeding,
+  };
+}
+
+function evaluateHtmlClassCounts({ className, isFullMove, moveCount, htmlFiles }) {
+  const inlineableRefs = [];
+  const allRefs = [];
+  let hasExceedingUsage = false;
+  let maxExistingClasses = 0;
+
+  for (const f of htmlFiles) {
+    const res = scanHtmlFileForClass(f, { className, isFullMove, moveCount });
+    if (res.fitRef) {
+      inlineableRefs.push(res.fitRef);
+    }
+    if (res.allRef) {
+      allRefs.push(res.allRef);
+    }
+    maxExistingClasses = Math.max(maxExistingClasses, res.maxClasses);
+    hasExceedingUsage = hasExceedingUsage || res.hasExceeding;
+  }
+  const freeHtmlSlots = maxExistingClasses > 0 ? Math.max(0, 3 - maxExistingClasses) : 0;
+  return {
+    inlineableHtmlLocations: inlineableRefs.join(', '),
+    allHtmlLocations: allRefs.join(', '),
+    hasExceedingUsage,
+    freeHtmlSlots,
+  };
 }
 
 function estimateShortRuleBytes(cssClassesToMoveToHtml) {
@@ -77,16 +120,16 @@ function estimateShortRuleBytes(cssClassesToMoveToHtml) {
   );
 }
 
-function buildClassifiedResult({ base, isFullMove, cssClassesToMoveToHtml, cssClassesToKeepInCss }) {
-  const moveToHtml = cssClassesToMoveToHtml.join(' ');
+function buildClassifiedResult({ base, isFullMove, utilities }) {
+  const moveToHtml = utilities.join(' ');
   if (isFullMove) {
     return {
       kind: 'short',
       rule: {
         ...base,
         utilities: moveToHtml,
-        count: cssClassesToMoveToHtml.length,
-        estBytes: estimateShortRuleBytes(cssClassesToMoveToHtml),
+        count: utilities.length,
+        estBytes: estimateShortRuleBytes(utilities),
       },
     };
   }
@@ -95,42 +138,57 @@ function buildClassifiedResult({ base, isFullMove, cssClassesToMoveToHtml, cssCl
     rule: {
       ...base,
       moveToHtml,
-      keepInCss: cssClassesToKeepInCss.join(' ') || '(shared rule in CSS)',
-      estBytes: cssClassesToMoveToHtml.length * 28,
+      keepInCss: '(shared rule in CSS)',
+      estBytes: utilities.length * 28,
+    },
+  };
+}
+
+function buildEngineerChoiceSplit({ base, utilities, freeHtmlSlots, moveCount }) {
+  if (!base.htmlLocations || freeHtmlSlots <= 0 || moveCount <= freeHtmlSlots) {
+    return null;
+  }
+  return {
+    kind: 'partial',
+    rule: {
+      ...base,
+      moveToHtml: `(engineer choice: any ${freeHtmlSlots} utilities)`,
+      keepInCss: utilities.join(' '),
+      estBytes: freeHtmlSlots * 28,
     },
   };
 }
 
 export function classifyStaticApplyRule({ selector, utilities, relPath, state }) {
   const className = extractApplyClassName(selector, state.isGlobal);
-  const cssClassesToKeepInCss = utilities.filter((u) => u.includes('--'));
-  const cssClassesToMoveToHtml = utilities.filter((u) => !u.includes('--'));
-  const isFullMove = cssClassesToKeepInCss.length === 0 && !state.multiRuleClasses.has(className);
+  const isFullMove = !state.multiRuleClasses.has(className);
   const canProcess =
     isEligibleForHtmlMove({ className, utilities, state }) &&
-    cssClassesToMoveToHtml.length > 0 &&
+    utilities.length > 0 &&
     (!state.isGlobal || isFullMove);
   if (!canProcess) {
     return null;
   }
   const { htmlFiles, specFiles } = getRuleTargetFiles(state);
-  const { inlineableHtmlLocations, hasExceedingUsage } = evaluateHtmlClassCounts({
+  const htmlEval = evaluateHtmlClassCounts({
     className,
     isFullMove,
-    moveCount: cssClassesToMoveToHtml.length,
+    moveCount: utilities.length,
     htmlFiles,
   });
-  if (!inlineableHtmlLocations || (!state.isGlobal && hasExceedingUsage)) {
-    return null;
+  const specRefs = state.findFileLineRefs(className, specFiles);
+  if (!htmlEval.inlineableHtmlLocations || (!state.isGlobal && htmlEval.hasExceedingUsage)) {
+    return state.isGlobal
+      ? null
+      : buildEngineerChoiceSplit({
+          base: { relPath, selector, className, htmlLocations: htmlEval.allHtmlLocations, specRefs },
+          utilities,
+          freeHtmlSlots: htmlEval.freeHtmlSlots,
+          moveCount: utilities.length,
+        });
   }
-  const base = {
-    relPath,
-    selector,
-    className,
-    htmlLocations: inlineableHtmlLocations,
-    specRefs: state.findFileLineRefs(className, specFiles),
-  };
-  return buildClassifiedResult({ base, isFullMove, cssClassesToMoveToHtml, cssClassesToKeepInCss });
+  const base = { relPath, selector, className, htmlLocations: htmlEval.inlineableHtmlLocations, specRefs };
+  return buildClassifiedResult({ base, isFullMove, utilities });
 }
 
 function recordRemainingComponentRule({ selector, utilities, relPath, state }) {
@@ -162,9 +220,10 @@ export function processApplyRule({ selector, body, relPath, state }) {
   const classified = classifyStaticApplyRule({ selector, utilities, relPath, state });
   if (classified?.kind === 'short') {
     state.shortStaticRules.push(classified.rule);
-  } else if (classified?.kind === 'partial') {
-    state.partialStaticRules.push(classified.rule);
-  } else {
-    recordRemainingComponentRule({ selector, utilities, relPath, state });
+    return;
   }
+  if (classified?.kind === 'partial') {
+    state.partialStaticRules.push(classified.rule);
+  }
+  recordRemainingComponentRule({ selector, utilities, relPath, state });
 }

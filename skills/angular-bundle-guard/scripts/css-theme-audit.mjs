@@ -147,7 +147,10 @@ function inspectParenthesizedVarMatch({ match, loc, themeTokens, definedVars }) 
       themeIssueAction: `Replace <code>${fullUtil}</code> with native <code>@theme</code> utility <code>${suggested}</code>.`,
     };
   }
-  if (!definedVars.has(varName)) {
+  const action = definedVars.has(varName)
+    ? `Move <code>${varName}</code> into <code>@theme static</code> in <code>styles.css</code> and replace <code>${fullUtil}</code> with a standard Tailwind utility.`
+    : `Broken CSS variable: <code>${varName}</code> in <code>${fullUtil}</code> is not defined in any CSS file.`;
+  if (!definedVars.has(varName) || loc.includes('.css:')) {
     return {
       relPath: loc,
       selector: fullUtil,
@@ -155,7 +158,7 @@ function inspectParenthesizedVarMatch({ match, loc, themeTokens, definedVars }) 
       estBytes: 30,
       specRefs: '',
       cssApplyRefs: '',
-      themeIssueAction: `Broken CSS variable: <code>${varName}</code> in <code>${fullUtil}</code> is not defined in any CSS file.`,
+      themeIssueAction: action,
     };
   }
   return null;

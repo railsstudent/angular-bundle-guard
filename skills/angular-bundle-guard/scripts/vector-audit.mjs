@@ -1,74 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { detectLeakedDependencies, formatBytes, rootDir } from './bundle-utils.mjs';
-
-function getLineNumber(content, index) {
-  return content.slice(0, index).split('\n').length;
-}
-
-function loadTsConfigPathAliases() {
-  const tsconfigPath = path.join(rootDir, 'tsconfig.json');
-  if (!fs.existsSync(tsconfigPath)) {
-    return { baseUrl: '.', paths: {} };
-  }
-  try {
-    const cleaned = fs.readFileSync(tsconfigPath, 'utf8').replace(/\/\*[\s\S]*?\*\/|^\s*\/\/.*$/gm, '');
-    const parsed = JSON.parse(cleaned);
-    const co = parsed.compilerOptions || {};
-    return { baseUrl: co.baseUrl || '.', paths: co.paths || {} };
-  } catch {
-    return { baseUrl: '.', paths: {} };
-  }
-}
-
-function resolveAliasFromPaths(specifier, aliasConfig) {
-  for (const [pattern, targets] of Object.entries(aliasConfig.paths)) {
-    if (!Array.isArray(targets) || targets.length === 0) {
-      continue;
-    }
-    const prefix = pattern.replace(/\*$/, '');
-    if (specifier.startsWith(prefix)) {
-      const rest = specifier.slice(prefix.length);
-      const target = targets[0].replace(/\*$/, '');
-      return path.normalize(path.join(aliasConfig.baseUrl, target, rest));
-    }
-  }
-  return null;
-}
-
-function resolveImportToRelPath(specifier, fromFile, aliasConfig) {
-  const aliased = resolveAliasFromPaths(specifier, aliasConfig);
-  if (aliased) {
-    return aliased;
-  }
-  if (specifier.startsWith('@/')) {
-    return path.join(aliasConfig.relSourceRoot || 'src', 'app', specifier.slice(2));
-  }
-  if (specifier.startsWith('.')) {
-    return path.relative(rootDir, path.resolve(path.dirname(fromFile), specifier));
-  }
-  return null;
-}
-
-function collectInjectAsyncCalls(tsFiles, aliasConfig) {
-  const calls = [];
-  const regex = /injectAsync\s*\([\s\S]*?import\(\s*['"]([^'"]+)['"]\s*\)/g;
-  for (const f of tsFiles) {
-    for (const match of f.content.matchAll(regex)) {
-      const specifier = match[1];
-      const resolvedRel = resolveImportToRelPath(specifier, f.file, aliasConfig);
-      if (resolvedRel) {
-        calls.push({
-          callerRel: path.relative(rootDir, f.file),
-          line: getLineNumber(f.content, match.index),
-          specifier,
-          resolvedRel,
-        });
-      }
-    }
-  }
-  return calls;
-}
+import {
+  collectInjectAsyncCalls,
+  findChainedInjectAsyncCalls,
+  findMultiInjectAsyncPerCaller,
+  findSequentialAwaitImports,
+  findUnusedBarrelExportsInChunk,
+  getLineNumber,
+  loadTsConfigPathAliases,
+} from './ts-import-utils.mjs';
 
 function checkBarrelReExport(call, tsFiles) {
   const targetDir = path.dirname(call.resolvedRel);
@@ -78,7 +19,7 @@ function checkBarrelReExport(call, tsFiles) {
   if (!barrelFile) {
     return null;
   }
-  const reExportRegex = new RegExp(`export\\s+\\*\\s+from\\s+['"]\\./${targetBase}['"]`);
+  const reExportRegex = new RegExp(`export\\s+(?!type\\b)(?:\\*|\\{[^}]*\\})\\s+from\\s+['"]\\./${targetBase}['"]`);
   const match = reExportRegex.exec(barrelFile.content);
   if (!match) {
     return null;
@@ -86,12 +27,12 @@ function checkBarrelReExport(call, tsFiles) {
   const barrelLine = getLineNumber(barrelFile.content, match.index);
   return {
     location: `${barrelRel}:${barrelLine}`,
-    detail: `Barrel re-exports "./${targetBase}" while ${call.callerRel}:${call.line} loads it via injectAsync(). Static imports from this barrel hoist the service and reduce injectAsync() to a tiny wrapper chunk.`,
-    fix: `Remove "export * from './${targetBase}'" from ${barrelRel} and import the service directly where needed.`,
+    detail: `Barrel re-exports "./${targetBase}" while ${call.callerRel}:${call.line} loads it via injectAsync(). Static imports from this barrel pull the module into the initial bundle and reduce injectAsync() to a tiny wrapper chunk.`,
+    fix: `Remove "export * from './${targetBase}'" from ${barrelRel} and import "./${targetBase}" directly where needed.`,
   };
 }
 
-function auditVector1MixedBarrels(injectCalls, tsFiles) {
+function auditVector1MixedBarrels({ injectCalls, tsFiles, mainInputs, aliasConfig }) {
   const findings = [];
   const seen = new Set();
   for (const call of injectCalls) {
@@ -99,8 +40,8 @@ function auditVector1MixedBarrels(injectCalls, tsFiles) {
     if (fs.existsSync(asIndexAbs)) {
       findings.push({
         location: `${call.callerRel}:${call.line}`,
-        detail: `injectAsync() imports barrel "${call.specifier}" (${path.join(call.resolvedRel, 'index.ts')}) instead of a direct service file, emitting an extra barrel wrapper chunk.`,
-        fix: `Import the concrete service file directly (e.g., "${call.specifier}/<name>.service").`,
+        detail: `injectAsync() imports barrel "${call.specifier}" (${path.join(call.resolvedRel, 'index.ts')}) instead of a direct file path, emitting an extra barrel wrapper chunk.`,
+        fix: `Import the concrete file directly instead of the barrel index.ts.`,
       });
       continue;
     }
@@ -108,6 +49,17 @@ function auditVector1MixedBarrels(injectCalls, tsFiles) {
     if (barrelIssue && !seen.has(barrelIssue.location)) {
       seen.add(barrelIssue.location);
       findings.push(barrelIssue);
+    }
+  }
+  for (const unusedIssue of findUnusedBarrelExportsInChunk({
+    chunkInputs: mainInputs,
+    tsFiles,
+    aliasConfig,
+    chunkLabel: 'main.js',
+  })) {
+    if (!seen.has(unusedIssue.location)) {
+      seen.add(unusedIssue.location);
+      findings.push(unusedIssue);
     }
   }
   return findings;
@@ -159,63 +111,18 @@ function auditVector4BrokenDefer(tsFiles) {
   return findings;
 }
 
-function findMultiInjectAsyncPerCaller(injectCalls) {
-  const callsByCaller = new Map();
-  for (const call of injectCalls) {
-    const list = callsByCaller.get(call.callerRel) || [];
-    list.push(call);
-    callsByCaller.set(call.callerRel, list);
-  }
-  const findings = [];
-  for (const [callerRel, list] of callsByCaller.entries()) {
-    if (list.length > 1) {
-      const specs = list.map((c) => c.specifier).join(', ');
-      findings.push({
-        location: `${callerRel}:${list[0].line}`,
-        detail: `"${path.basename(callerRel)}" calls injectAsync() ${list.length} times (${specs}). If already inside @defer, this creates extra sequential downloads.`,
-        fix: `Use normal inject() if "${path.basename(callerRel)}" is inside @defer, or run multiple injectAsync() calls in parallel with Promise.all([...]).`,
-      });
-    }
-  }
-  return findings;
-}
-
-function findSequentialAwaitImports(tsFiles) {
-  const findings = [];
-  const blockRegex = /async\s+(?:function\s+)?([a-zA-Z0-9_]+)?\s*\([^)]*\)\s*(?::\s*[^{]+)?\{([\s\S]*?)^\s{2,4}\}/gm;
-  const awaitImportRegex = /await\s+import\(\s*['"]([^'"]+)['"]\s*\)/g;
-
-  for (const f of tsFiles) {
-    const rel = path.relative(rootDir, f.file);
-    for (const match of f.content.matchAll(blockRegex)) {
-      const imports = [...match[2].matchAll(awaitImportRegex)];
-      if (imports.length > 1) {
-        const line = getLineNumber(f.content, match.index);
-        const specs = imports.map((m) => m[1]).join(', ');
-        findings.push({
-          location: `${rel}:${line}`,
-          detail: `"${match[1] || 'async function'}()" calls "await import()" ${imports.length} times sequentially (${specs}).`,
-          fix: `Run independent dynamic imports concurrently with Promise.all([${imports.map((m) => `import('${m[1]}')`).join(', ')}]).`,
-        });
-      }
-    }
-  }
-  return findings;
-}
-
-function auditVector5NestedInjectAsync(injectCalls, tsFiles) {
-  const targetRelSet = new Set(injectCalls.map((c) => `${c.resolvedRel}.ts`));
-  const findings = [];
-  for (const call of injectCalls) {
-    if (targetRelSet.has(call.callerRel)) {
-      findings.push({
-        location: `${call.callerRel}:${call.line}`,
-        detail: `"${path.basename(call.callerRel)}" is already lazy-loaded via injectAsync(), and calls injectAsync() again for "${call.specifier}", creating a sequential network waterfall hop.`,
-        fix: `Use synchronous inject() inside "${path.basename(call.callerRel)}" and keep both services out of barrel index.ts files.`,
-      });
-    }
-  }
-  return [...findings, ...findMultiInjectAsyncPerCaller(injectCalls), ...findSequentialAwaitImports(tsFiles)];
+function auditVector5NestedInjectAsync(injectCalls, tsFiles, mainInputs) {
+  const mainRelSet = new Set(
+    mainInputs.filter(([, v]) => v.bytesInOutput > 0).map(([p]) => path.normalize(p)),
+  );
+  const scopedCalls = mainRelSet.size > 0 ? injectCalls.filter((c) => mainRelSet.has(c.callerRel)) : injectCalls;
+  const scopedFiles =
+    mainRelSet.size > 0 ? tsFiles.filter((f) => mainRelSet.has(path.relative(rootDir, f.file))) : tsFiles;
+  return [
+    ...findChainedInjectAsyncCalls(injectCalls, scopedCalls),
+    ...findMultiInjectAsyncPerCaller(scopedCalls),
+    ...findSequentialAwaitImports(scopedFiles),
+  ];
 }
 
 function getExemptRouteTargets(routesContent) {
@@ -262,7 +169,7 @@ function auditVector7AppConfig(tsFiles) {
   for (const match of cfgFile.content.matchAll(regex)) {
     findings.push({
       location: `${rel}:${getLineNumber(cfgFile.content, match.index)}`,
-      detail: `app.config.ts statically imports "${match[1]}", hoisting it into main.js at startup.`,
+      detail: `app.config.ts statically imports "${match[1]}", pulling it into main.js at startup.`,
       fix: `Lazy-load "${match[1]}" via injectAsync() or await import() inside the initializer/interceptor callback.`,
     });
   }
@@ -286,7 +193,11 @@ export function getVectorAudit(allCodeFiles, mainInputs = [], projectConfig = {}
   const injectCalls = collectInjectAsyncCalls(tsFiles, aliasConfig);
 
   return [
-    { id: 1, name: '1. Mixed Barrel File (index.ts)', findings: auditVector1MixedBarrels(injectCalls, tsFiles) },
+    {
+      id: 1,
+      name: '1. Mixed Barrel File (index.ts)',
+      findings: auditVector1MixedBarrels({ injectCalls, tsFiles, mainInputs, aliasConfig }),
+    },
     { id: 2, name: '2. Value Import Instead of Type Import', findings: auditVector2ValueImports(tsFiles) },
     {
       id: 3,
@@ -297,7 +208,7 @@ export function getVectorAudit(allCodeFiles, mainInputs = [], projectConfig = {}
     {
       id: 5,
       name: '5. Redundant Nested injectAsync() & Sequential await import()',
-      findings: auditVector5NestedInjectAsync(injectCalls, tsFiles),
+      findings: auditVector5NestedInjectAsync(injectCalls, tsFiles, mainInputs),
     },
     { id: 6, name: '6. Non-Home Eager Route component:', findings: auditVector6EagerRoutes(tsFiles) },
     { id: 7, name: '7. app.config.ts Eager Feature/Core Imports', findings: auditVector7AppConfig(tsFiles) },

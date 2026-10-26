@@ -14,6 +14,7 @@ import {
 } from './bundle-utils.mjs';
 import { getCssAnalysis, getSourceFiles } from './css-audit.mjs';
 import { computeProjectHash, readCachedReport, writeHtmlReport } from './html-report.mjs';
+import { getLazyVectorAudit } from './lazy-vector-audit.mjs';
 import { getVectorAudit } from './vector-audit.mjs';
 
 function formatChunkLine(name, bytes) {
@@ -137,6 +138,20 @@ function printVectorAuditSummary(vectorAudit, reportPath) {
   }
 }
 
+function printLazyVectorAuditSummary(lazyVectorAudit, reportPath) {
+  console.log('\n------------------------------------------------------');
+  console.log('3 Lazy Chunk Vectors Audit Summary');
+  console.log(`(Full details in ${reportPath})`);
+  console.log('------------------------------------------------------');
+  for (const v of lazyVectorAudit) {
+    const badge = v.findings.length > 0 ? `⚠️ ${v.findings.length} issue(s)` : '✅ Pass';
+    console.log(`  * ${v.name}: ${badge}`);
+    for (const f of v.findings) {
+      console.log(`      -> ${f.location} — ${f.detail}`);
+    }
+  }
+}
+
 function runCssOptimizationAudit(projectConfig, allCodeFiles, reportPath) {
   console.log('\n------------------------------------------------------');
   console.log('Component CSS & Dead Class Optimization Summary');
@@ -177,6 +192,21 @@ function buildHtmlChunkRows(outputEntries, statsFile) {
     });
 }
 
+function runAuditsAndCollectData({ allCodeFiles, outputEntries, inputEntries, projectConfig, reportPath }) {
+  const vectorAudit = getVectorAudit(allCodeFiles, inputEntries, projectConfig);
+  printVectorAuditSummary(vectorAudit, reportPath);
+  const lazyVectorAudit = getLazyVectorAudit({
+    allCodeFiles,
+    outputEntries,
+    mainInputs: inputEntries,
+    projectConfig,
+  });
+  printLazyVectorAuditSummary(lazyVectorAudit, reportPath);
+  const cssAnalysis = runCssOptimizationAudit(projectConfig, allCodeFiles, reportPath);
+  printLeakAudit(inputEntries, projectConfig.relSourceRoot);
+  return { vectorAudit, lazyVectorAudit, cssAnalysis };
+}
+
 function executeFullAudit(projectConfig, hash, reportPath) {
   const logLines = [];
   const origLog = console.log;
@@ -205,15 +235,17 @@ function executeFullAudit(projectConfig, hash, reportPath) {
     printMainBreakdown(mainEntry, sortedInputs, projectConfig.relSourceRoot);
   }
 
-  const vectorAudit = getVectorAudit(allCodeFiles, inputEntries, projectConfig);
-  printVectorAuditSummary(vectorAudit, reportPath);
-  const cssAnalysis = runCssOptimizationAudit(projectConfig, allCodeFiles, reportPath);
-  printLeakAudit(inputEntries, projectConfig.relSourceRoot);
-
+  const auditResults = runAuditsAndCollectData({ allCodeFiles, outputEntries, inputEntries, projectConfig, reportPath });
   console.log = origLog;
   const summaryText = logLines.join('\n');
   const chunks = buildHtmlChunkRows(outputEntries, statsFile);
-  writeHtmlReport({ reportPath, hash, projectConfig, summaryText, auditData: { chunks, vectorAudit, cssAnalysis } });
+  writeHtmlReport({
+    reportPath,
+    hash,
+    projectConfig,
+    summaryText,
+    auditData: { chunks, ...auditResults },
+  });
   console.log(`[HTML Report] Generated: ${reportPath}\n`);
 }
 

@@ -146,16 +146,15 @@ function renderShortStaticTable(shortRules) {
     </tr>`,
     )
     .join('\n');
-  return `<table>
-    <thead><tr><th>CSS Location</th><th>HTML Location</th><th>Selector</th><th>Inline Utilities to HTML</th><th>Est. Saved</th><th>Unit Test Check</th></tr></thead>
-    <tbody>${rows}</tbody>
-  </table>`;
+  return `<table><thead><tr><th>CSS Location</th><th>HTML Location</th><th>Selector</th><th>Inline Utilities to HTML</th><th>Est. Saved</th><th>Unit Test Check</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function renderPartialStaticTable(partialRules) {
   if (partialRules.length === 0) {
     return '<p class="muted">None detected.</p>';
   }
+  const note =
+    "<p class=\"small-ref\"><strong>Note:</strong> When moving classes to <code>.html</code>, move or keep matching <code>x:*</code> pairs together (e.g., <code>grid-cols-*</code> with <code>md:grid-cols-*</code>, <code>border-*</code> with <code>focus:border-*</code>) so <code>.css</code> styles don't override <code>.html</code> classes.</p>";
   const rows = partialRules
     .map(
       (p) => `<tr class="filter-row">
@@ -169,10 +168,7 @@ function renderPartialStaticTable(partialRules) {
     </tr>`,
     )
     .join('\n');
-  return `<table>
-    <thead><tr><th>CSS Location</th><th>HTML Location</th><th>Selector</th><th>HTML Class Update</th><th>Keep in CSS</th><th>Est. Saved</th><th>Unit Test Check</th></tr></thead>
-    <tbody>${rows}</tbody>
-  </table>`;
+  return `${note}<table><thead><tr><th>CSS Location</th><th>HTML Location</th><th>Selector</th><th>HTML Class Update</th><th>Keep in CSS</th><th>Est. Saved</th><th>Unit Test Check</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function renderDuplicateRulesTable(duplicateRules) {
@@ -191,10 +187,7 @@ function renderDuplicateRulesTable(duplicateRules) {
     </tr>`,
     )
     .join('\n');
-  return `<table>
-    <thead><tr><th>CSS Location</th><th>HTML Location</th><th>Selectors</th><th>Consolidated CSS &amp; HTML Fix</th><th>Est. Saved</th><th>Unit Test Check</th></tr></thead>
-    <tbody>${rows}</tbody>
-  </table>`;
+  return `<table><thead><tr><th>CSS Location</th><th>HTML Location</th><th>Selectors</th><th>Consolidated CSS &amp; HTML Fix</th><th>Est. Saved</th><th>Unit Test Check</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function renderReportStyles() {
@@ -224,11 +217,11 @@ function renderVectorRow(v) {
     .join('\n');
 }
 
-function renderVectorAuditSection(vectorAudit = []) {
+function renderVectorAuditSection(vectorAudit = [], title = '8 Initial Bundle Vectors Audit') {
   const issueCount = vectorAudit.reduce((sum, v) => sum + v.findings.length, 0);
   const rows = vectorAudit.map(renderVectorRow).join('\n');
   return `<details open>
-      <summary>8 Initial Bundle Vectors Audit (${issueCount} issue(s) across ${vectorAudit.length} vectors)</summary>
+      <summary>${escapeHtml(title)} (${issueCount} issue(s) across ${vectorAudit.length} vectors)</summary>
       <table>
         <thead><tr><th>Vector</th><th>Status</th><th>Location</th><th>Finding &amp; Recommended Fix</th></tr></thead>
         <tbody>${rows}</tbody>
@@ -264,7 +257,7 @@ function renderCssSections(cssAnalysis = {}) {
 }
 
 export function writeHtmlReport({ reportPath, hash, projectConfig, summaryText, auditData }) {
-  const { chunks = [], vectorAudit = [], cssAnalysis = {} } = auditData;
+  const { chunks = [], vectorAudit = [], lazyVectorAudit = [], cssAnalysis = {} } = auditData;
   const html = `<!doctype html>
 ${SUMMARY_START}${summaryText.replaceAll('-->', '--&gt;')}${SUMMARY_END}
 <html lang="en">
@@ -286,7 +279,8 @@ ${SUMMARY_START}${summaryText.replaceAll('-->', '--&gt;')}${SUMMARY_END}
       <summary>Output Chunks &amp; Embedded Styles (${chunks.length})</summary>
       ${renderChunkTable(chunks)}
     </details>
-    ${renderVectorAuditSection(vectorAudit)}
+    ${renderVectorAuditSection(vectorAudit, '8 Initial Bundle Vectors Audit')}
+    ${renderVectorAuditSection(lazyVectorAudit, '3 Lazy Chunk Vectors Audit')}
     ${renderCssSections(cssAnalysis)}
     <details>
       <summary>Raw CLI Summary</summary>

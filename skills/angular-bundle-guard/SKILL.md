@@ -23,7 +23,7 @@ Begin your response with `🛡️ **[angular-bundle-guard]**` so the user knows 
    - Determine the **previous ("before") build size** from the first available source:
      - **Source A — User Memory / Target**: Use the size provided by the user (e.g., "`main.js` was ~132 kB").
      - **Source B — Earlier Build in Session**: Use numbers recorded earlier in the conversation.
-     - **Source C — Previous Git Commit (`HEAD` or `main`)**: Measure via a temporary detached worktree (`git worktree add --detach /tmp/bundle-before HEAD` ... `git worktree remove /tmp/bundle-before`) or ask the user for their expected baseline.
+     - **Source C — Previous Git Commit (`HEAD` or `main`)**: Measure via a temporary detached worktree (`git worktree add --detach /tmp/bundle-before HEAD`, copy any gitignored generated config files like `public/*.json` or run `npm run prebuild` if present, run `analyze-bundle.mjs`, then `git worktree remove --force /tmp/bundle-before`) or ask the user for their expected baseline.
 
 ### 2. Classify the change
 
@@ -37,13 +37,14 @@ Compare current initial sizes against the previous build size:
 
 ### 3. Diagnose leaks, audit lazy chunks, or find reduction opportunities
 
-When an increase is a leak, when auditing lazy chunks, or when asked how to reduce bundle size, read [`references/audit-reference.md`](references/audit-reference.md) and apply these rules:
+When an increase is a leak, when auditing lazy chunks, or when asked how to reduce bundle size, apply these rules:
 
-1. **Zero-Permission-Prompt Rule (Never Read `dist/` or `<tmpdir>`)**:
-   - **Never** call file-reading tools on `<tmpdir>/bundle-audit-report-<hash>.html` or any file inside `dist/` (`stats.json`, `browser-stats.json`, `chunk-*.js`), as reading gitignored or external files triggers repeated permission prompts. Rely exclusively on `analyze-bundle.mjs` stdout and git-tracked files under `src/`.
-2. **Audit Against [`references/audit-reference.md`](references/audit-reference.md)**:
-   - Check the **8 Initial Bundle Vectors**, the **4 Lazy Chunk & Component CSS Vectors**, and all CSS guardrails in [`references/audit-reference.md`](references/audit-reference.md) (keep the Home component eager).
-3. **Never Hide a Trade-off**:
+1. **Zero-File-Read Audit Rule (Sole Source of Truth: `analyze-bundle.mjs` Stdout)**:
+   - `analyze-bundle.mjs` automatically audits all **8 Initial Bundle Vectors**, all **3 Lazy Chunk Vectors**, all **4 Component CSS & Dead Class categories**, and **Leak Detection** in a single pass.
+   - During the audit phase (Steps 1–4), **never call file-reading tools (`read_file`, `grep`, etc.) on any file in `src/`, `dist/`, or `<tmpdir>`**.
+   - Only read [`references/audit-reference.md`](references/audit-reference.md) if `analyze-bundle.mjs` reports `⚠️` issues on a vector or after the user approves fixes in Step 4.
+   - Only read `src/` files **after** the user approves the implementation plan in Step 4.
+2. **Never Hide a Trade-off**:
    - When a pattern is not strictly dead code but still costs bundle bytes (for example, a global `@utility` or rule in `styles.css` unused in `.html`/`.ts` and only consumed via `@apply` inside a component `styleUrl` file), always **surface the finding with the trade-off and fix** rather than silently hiding it or telling the user to blindly delete it.
 
 ### 4. Report findings in everyday English, link the HTML report, and wait for approval
