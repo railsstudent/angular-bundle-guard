@@ -41,8 +41,12 @@ An Antigravity plugin and agent skill that audits Angular initial bundle size (`
 You can install `angular-bundle-guard` directly as an Antigravity plugin so that `/angular-bundle-guard` is available across all workspaces:
 
 ```bash
+# To install an Antigravity plugin directly from a GitHub repository
+agy plugin install https://github.com/railsstudent/angular-bundle-guard
+
 # Install from a local clone via Antigravity CLI
-agy plugin install /path/to/angular-bundle-guard
+git clone https://github.com/railsstudent/angular-bundle-guard.git
+agy plugin install ./angular-bundle-guard
 
 # Or copy directly into your global Antigravity plugins directory
 mkdir -p ~/.gemini/config/plugins
