@@ -69,10 +69,12 @@ You can install the skill into an individual Angular project (or globally) using
 
 ```bash
 # Add to the current Angular project (.agents/skills/angular-bundle-guard)
-npx skills add railsstudent/angular-bundle-guard
+npx skills add https://github.com/railsstudent/angular-bundle-guard
+# (or using GitHub owner/repo shorthand: npx skills add railsstudent/angular-bundle-guard)
 
 # Add globally for your user account
-npx skills add railsstudent/angular-bundle-guard -g
+npx skills add https://github.com/railsstudent/angular-bundle-guard -g
+# (or using GitHub owner/repo shorthand: npx skills add railsstudent/angular-bundle-guard -g)
 
 # Or install from a local checkout
 npx skills add /path/to/angular-bundle-guard
