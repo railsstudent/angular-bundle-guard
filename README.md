@@ -1,6 +1,6 @@
 # Angular Bundle Guard
 
-An Antigravity plugin and agent skill that audits Angular initial bundle size (`main.js`, vendor chunks, initial total) and lazy chunks, diagnoses **8 eager-loading leak vectors**, and identifies **4 categories of Tailwind CSS v4 & component `.css` optimizations**.
+An Antigravity plugin and agent skill that audits Angular initial bundle size (`main.js`, vendor chunks, initial total) and lazy chunks, diagnoses **8 initial bundle leak vectors** and **3 lazy chunk vectors**, and identifies **4 categories of Tailwind CSS v4 & component `.css` optimizations**.
 
 ---
 
@@ -17,8 +17,12 @@ An Antigravity plugin and agent skill that audits Angular initial bundle size (`
   6. Non-default eager routes (`component:` instead of `loadComponent:` in `app.routes.ts`)
   7. Static `@/features/...`, `@/core/...`, or relative `./features/...`, `./core/...` imports in `app.config.ts`
   8. Static `.json` assets bundled into `main-*.js`
+- **3 Lazy Chunk Vectors**:
+  1. Bloated lazy route / `@defer` chunks (external SDKs bundled into lazy component chunks or unwrapped `@if` feature children inside lazy routes)
+  2. Sequential lazy chunk downloads (chained `injectAsync()` hops, sequential `await import()` calls, or nested `@defer` blocks)
+  3. Shared lazy chunk & barrel leaks (unused barrel exports pulled into lazy chunks, misplaced feature barrels, and cross-feature static imports)
 - **4 CSS & Tailwind v4 Optimization Categories**:
-  1. Dead / unused CSS selectors, orphan component `.css` files, and unused `--*` custom properties
+  1. Dead / unused CSS selectors, `@utility` rules, orphan component `.css` files, and unused `--*` custom properties (with `@theme` token-to-utility mapping for `--color-*`, `--font-*`, `--spacing-*`, `--container-*`, etc.)
   2. Short static `@apply` rules (`<= 3` utilities) safe to inline into HTML templates
   3. Partial static splits (base utilities vs. `hover:`/`focus:`/responsive variants)
   4. Duplicate `@apply` blocks within the same file or across component `.css` files, plus `@tailwindcss/postcss` `@property` overhead detection
@@ -120,12 +124,13 @@ angular-bundle-guard/
             ├── analyze-bundle.mjs                  # Main CLI entry point
             ├── bundle-utils.mjs                    # Stats discovery, freshness, & leak helpers
             ├── vector-audit.mjs                    # 8 Initial Bundle Vectors scanner
+            ├── lazy-vector-audit.mjs               # 3 Lazy Chunk Vectors scanner
+            ├── ts-import-utils.mjs                 # TypeScript path alias, barrel, & async import helpers
             ├── css-audit.mjs                       # Component & global CSS orchestrator
             ├── css-apply-rules.mjs                 # @apply classification (Categories 2 & 3)
             ├── css-duplicates.mjs                  # Intra-file & cross-file duplicate detector
             ├── css-theme-audit.mjs                 # @theme, CSS variables, & PostCSS check
             ├── html-report.mjs                     # SHA-256 caching & HTML report builder
-            ├── html-sections.mjs                   # HTML table & collapsible section renderers
             └── report.css                          # Offline dark-theme report stylesheet
 ```
 
