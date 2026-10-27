@@ -3,6 +3,8 @@ import path from 'node:path';
 import { getConfigSearchDirs, POSTCSS_CONFIG_FILES, rootDir } from './bundle-utils.mjs';
 
 const COLOR_PREFIXES = 'bg|text|border|ring|fill|stroke|from|via|to|outline|accent|caret|divide|placeholder';
+const SPACING_PREFIXES =
+  'p|px|py|pt|pr|pb|pl|ps|pe|m|mx|my|mt|mr|mb|ml|ms|me|gap|gap-x|gap-y|space-x|space-y|w|min-w|max-w|h|min-h|max-h|size|inset|inset-x|inset-y|top|right|bottom|left|start|end|basis|scroll-m|scroll-mx|scroll-my|scroll-mt|scroll-mr|scroll-mb|scroll-ml|scroll-ms|scroll-me|scroll-p|scroll-px|scroll-py|scroll-pt|scroll-pr|scroll-pb|scroll-pl|scroll-ps|scroll-pe|indent';
 
 function findPostcssConfigFile(projectRoot = rootDir) {
   for (const dir of getConfigSearchDirs(projectRoot)) {
@@ -56,8 +58,10 @@ function buildThemeTokenUtilityRegex(tokenName) {
     ['--border-color-', (s) => `border-${s}`],
     ['--ring-color-', (s) => `ring-${s}`],
     ['--color-', (s) => `(?:${COLOR_PREFIXES})-${s}`],
-    ['--radius-', (s) => `rounded-${s}`],
-    ['--shadow-', (s) => `shadow-${s}`],
+    ['--spacing-', (s) => `-?(?:${SPACING_PREFIXES})-${s}`],
+    ['--container-', (s) => `(?:max-w|min-w|w)-${s}`],
+    ['--radius-', (s) => `rounded(?:-[a-z]+)?-${s}`],
+    ['--shadow-', (s) => `(?:inset-|drop-)?shadow-${s}`],
   ];
   const matched = rules.find(([prefix]) => tokenName.startsWith(prefix));
   const utilPattern = matched ? matched[1](tokenName.slice(matched[0].length)) : tokenName.replace(/^--/, '');
@@ -68,7 +72,16 @@ function getSuggestedThemeUtility(utilPrefix, varName, themeTokens) {
   if (!themeTokens.has(varName)) {
     return null;
   }
-  const stripPrefixes = ['--text-color-', '--background-color-', '--border-color-', '--ring-color-', '--color-', '--font-'];
+  const stripPrefixes = [
+    '--text-color-',
+    '--background-color-',
+    '--border-color-',
+    '--ring-color-',
+    '--color-',
+    '--font-',
+    '--spacing-',
+    '--container-',
+  ];
   const matched = stripPrefixes.find((p) => varName.startsWith(p));
   if (!matched) {
     return null;
