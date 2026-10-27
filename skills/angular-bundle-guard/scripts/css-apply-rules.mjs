@@ -159,9 +159,9 @@ function buildEngineerChoiceSplit({ base, utilities, freeHtmlSlots, moveCount })
   };
 }
 
-export function classifyStaticApplyRule({ selector, utilities, relPath, state }) {
+export function classifyStaticApplyRule({ selector, utilities, relPath, state, hasNonApplyCss = false }) {
   const className = extractApplyClassName(selector, state.isGlobal);
-  const isFullMove = !state.multiRuleClasses.has(className);
+  const isFullMove = !state.multiRuleClasses.has(className) && !hasNonApplyCss;
   const canProcess =
     isEligibleForHtmlMove({ className, utilities, state }) &&
     utilities.length > 0 &&
@@ -209,15 +209,21 @@ function recordRemainingComponentRule({ selector, utilities, relPath, state }) {
 }
 
 export function processApplyRule({ selector, body, relPath, state }) {
-  const applyMatch = !selector.includes(':host') && body.match(/@apply\s+([^;]+);/);
-  if (!applyMatch || (state.isGlobal && !selector.startsWith('@utility '))) {
+  if (selector.includes(':host') || (state.isGlobal && !selector.startsWith('@utility '))) {
     return;
   }
-  const utilities = applyMatch[1].trim().split(/\s+/).filter(Boolean);
+  const applyMatches = [...body.matchAll(/@apply\s+([^;]+);/g)];
+  if (applyMatches.length === 0) {
+    return;
+  }
+  const utilities = applyMatches
+    .flatMap((m) => m[1].trim().split(/\s+/))
+    .filter(Boolean);
+  const hasNonApplyCss = body.replace(/@apply\s+[^;]+;/g, '').trim().length > 0;
   if (!state.isGlobal) {
     state.fileApplyBlocks.push({ selector, utilities, loc: relPath });
   }
-  const classified = classifyStaticApplyRule({ selector, utilities, relPath, state });
+  const classified = classifyStaticApplyRule({ selector, utilities, relPath, state, hasNonApplyCss });
   if (classified?.kind === 'short') {
     state.shortStaticRules.push(classified.rule);
     return;
