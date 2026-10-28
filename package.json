@@ -1,0 +1,15 @@
+{
+    "name": "angular-bundle-guard",
+    "version": "0.0.0",
+    "scripts": {
+        "lint": "eslint \"skills/**/*.mjs\"",
+        "lint:fix": "eslint \"skills/**/*.mjs\" --fix",
+        "format": "prettier --write \"skills/**/*.mjs\""
+    },
+    "private": true,
+    "devDependencies": {
+        "@eslint/js": "^10.0.1",
+        "eslint": "^10.12.0",
+        "prettier": "3.9.10"
+    }
+}

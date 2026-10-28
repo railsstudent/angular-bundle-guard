@@ -9,7 +9,13 @@ export const SRC_DIR = path.join(rootDir, 'src');
 export const CHUNK_DISPLAY_LIMIT = 8;
 
 const ALLOWED_MAIN_PACKAGES = new Set([
-  '@angular/core', '@angular/common', '@angular/platform-browser', '@angular/router', '@angular/service-worker', 'rxjs', 'tslib',
+  '@angular/core',
+  '@angular/common',
+  '@angular/platform-browser',
+  '@angular/router',
+  '@angular/service-worker',
+  'rxjs',
+  'tslib',
 ]);
 
 export const POSTCSS_CONFIG_FILES = ['postcss.config.json', '.postcssrc.json'];
@@ -38,13 +44,17 @@ function selectTargetProjectName(appProjects, projectArg) {
   const appNames = [...appProjects.keys()];
   if (projectArg) {
     if (!appProjects.has(projectArg)) {
-      console.error(`\n[analyze-bundle] Error: Invalid application project "${projectArg}". Available: ${appNames.join(', ')}`);
+      console.error(
+        `\n[analyze-bundle] Error: Invalid application project "${projectArg}". Available: ${appNames.join(', ')}`,
+      );
       process.exit(1);
     }
     return projectArg;
   }
   if (appNames.length > 1) {
-    console.error(`\n[analyze-bundle] Error: Multiple application projects in angular.json. Specify one: ${appNames.join(', ')}`);
+    console.error(
+      `\n[analyze-bundle] Error: Multiple application projects in angular.json. Specify one: ${appNames.join(', ')}`,
+    );
     process.exit(1);
   }
   return appNames[0];
@@ -52,10 +62,13 @@ function selectTargetProjectName(appProjects, projectArg) {
 
 function extractGlobalStyleEntries(proj, relSourceRoot) {
   const rawStyles = proj.architect?.build?.options?.styles || [];
-  const cssEntries = rawStyles
-    .map((entry) => (typeof entry === 'string' ? entry : entry?.input))
-    .filter((entry) => typeof entry === 'string' && entry.endsWith('.css'))
-    .map((entry) => path.normalize(entry));
+  const cssEntries = rawStyles.reduce((acc, entry) => {
+    const input = typeof entry === 'string' ? entry : entry?.input;
+    if (typeof input === 'string' && input.endsWith('.css')) {
+      acc.push(path.normalize(input));
+    }
+    return acc;
+  }, []);
   return cssEntries.length > 0 ? cssEntries : [path.join(relSourceRoot, 'styles.css')];
 }
 
@@ -63,8 +76,12 @@ export function resolveProjectConfig(projectArg) {
   const appProjects = getApplicationProjects();
   if (appProjects.size === 0) {
     return {
-      projectName: 'default', projectRoot: rootDir, relSourceRoot: 'src',
-      sourceRoot: SRC_DIR, distDir: DIST_DIR, globalStyles: [path.join('src', 'styles.css')],
+      projectName: 'default',
+      projectRoot: rootDir,
+      relSourceRoot: 'src',
+      sourceRoot: SRC_DIR,
+      distDir: DIST_DIR,
+      globalStyles: [path.join('src', 'styles.css')],
     };
   }
   const projectName = selectTargetProjectName(appProjects, projectArg);
@@ -73,8 +90,11 @@ export function resolveProjectConfig(projectArg) {
   const outOpt = proj.architect?.build?.options?.outputPath;
   const relDist = (typeof outOpt === 'string' ? outOpt : outOpt?.base) || path.join('dist', projectName);
   return {
-    projectName, projectRoot: path.join(rootDir, proj.root || ''), relSourceRoot,
-    sourceRoot: path.join(rootDir, relSourceRoot), distDir: path.join(rootDir, relDist),
+    projectName,
+    projectRoot: path.join(rootDir, proj.root || ''),
+    relSourceRoot,
+    sourceRoot: path.join(rootDir, relSourceRoot),
+    distDir: path.join(rootDir, relDist),
     globalStyles: extractGlobalStyleEntries(proj, relSourceRoot),
   };
 }
@@ -84,10 +104,12 @@ export function resolveProjectConfig(projectArg) {
  */
 export function findStatsFile(distDir = DIST_DIR) {
   const searchDir = fileExists(distDir) ? distDir : DIST_DIR;
-  return getSourceFiles(searchDir, ['.json']).find((f) => {
-    const base = path.basename(f);
-    return base === 'browser-stats.json' || base === 'stats.json';
-  }) || null;
+  return (
+    getSourceFiles(searchDir, ['.json']).find((f) => {
+      const base = path.basename(f);
+      return base === 'browser-stats.json' || base === 'stats.json';
+    }) || null
+  );
 }
 
 function isAnyRootConfigStale(statsMtimeMs) {
@@ -98,13 +120,20 @@ function isAnyRootConfigStale(statsMtimeMs) {
  * Checks if any file in sourceRoot or root build configs has an mtimeMs greater than the given timestamp.
  */
 function isStatsStale(statsMtimeMs, sourceRoot = SRC_DIR) {
-  return isAnyRootConfigStale(statsMtimeMs) || getSourceFiles(sourceRoot).some((fullPath) => getFileMtimeMs(fullPath) > statsMtimeMs);
+  return (
+    isAnyRootConfigStale(statsMtimeMs) ||
+    getSourceFiles(sourceRoot).some((fullPath) => getFileMtimeMs(fullPath) > statsMtimeMs)
+  );
 }
 
 function getBuildReason(forceRebuild, distDir, sourceRoot) {
-  if (forceRebuild) return 'Forced rebuild requested (--rebuild).';
+  if (forceRebuild) {
+    return 'Forced rebuild requested (--rebuild).';
+  }
   const existingStats = findStatsFile(distDir);
-  if (!existingStats) return 'browser-stats.json is missing.';
+  if (!existingStats) {
+    return 'browser-stats.json is missing.';
+  }
   if (isStatsStale(getFileMtimeMs(existingStats), sourceRoot)) {
     return `Source files in ${path.relative(rootDir, sourceRoot) || 'src'} are newer than browser-stats.json.`;
   }
@@ -272,14 +301,18 @@ export function detectLeakedDependencies(inputEntries, relSourceRoot = 'src') {
   const eagerComponents = [];
 
   for (const [inputPath, val] of inputEntries) {
-    if (val.bytesInOutput <= 0) continue;
-    if (isAngularComponentFile(inputPath, relSourceRoot)) {
-      eagerComponents.push({
-        type: 'Eager Component in Main', path: inputPath, bytes: val.bytesInOutput,
-        advice: 'Verify this component belongs on the initial startup view; lazy-load secondary routes via loadComponent or @defer.',
-      });
-    } else if (inputPath.startsWith('node_modules/')) {
-      recordPackageLeak(packageLeaks, inputPath, val.bytesInOutput);
+    if (val.bytesInOutput > 0) {
+      if (isAngularComponentFile(inputPath, relSourceRoot)) {
+        eagerComponents.push({
+          type: 'Eager Component in Main',
+          path: inputPath,
+          bytes: val.bytesInOutput,
+          advice:
+            'Verify this component belongs on the initial startup view; lazy-load secondary routes via loadComponent or @defer.',
+        });
+      } else if (inputPath.startsWith('node_modules/')) {
+        recordPackageLeak(packageLeaks, inputPath, val.bytesInOutput);
+      }
     }
   }
 

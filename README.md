@@ -123,10 +123,13 @@ angular-bundle-guard/
         └── scripts/
             ├── analyze-bundle.mjs                  # Main CLI entry point
             ├── bundle-utils.mjs                    # Stats discovery, freshness, & leak helpers
+            ├── fs-utils.mjs                        # Centralized node:fs utilities & file caching
             ├── vector-audit.mjs                    # 8 Initial Bundle Vectors scanner
             ├── lazy-vector-audit.mjs               # 3 Lazy Chunk Vectors scanner
             ├── ts-import-utils.mjs                 # TypeScript path alias, barrel, & async import helpers
             ├── css-audit.mjs                       # Component & global CSS orchestrator
+            ├── component-css-calc.mjs              # Component CSS size & @property overhead calculator
+            ├── component-css-report.mjs            # Component CSS & 4-category HTML table renderers
             ├── css-apply-rules.mjs                 # @apply classification (Categories 2 & 3)
             ├── css-duplicates.mjs                  # Intra-file & cross-file duplicate detector
             ├── css-theme-audit.mjs                 # @theme, CSS variables, & PostCSS check

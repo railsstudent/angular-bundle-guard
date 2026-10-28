@@ -70,87 +70,72 @@ function formatDeadCssAction(d, { escapeHtml, formatFileLinks }) {
   return `Delete unused <code>${escapeHtml(d.selector)}</code> rule from CSS (not used in any <code>.html</code>, <code>.ts</code>, or <code>.css</code> file).`;
 }
 
-function renderDeadCssTable(deadClasses, helpers) {
-  if (deadClasses.length === 0) {
+function renderCssTable(items, headHtml, renderCells) {
+  if (items.length === 0) {
     return '<p class="muted">None detected.</p>';
   }
+  const rows = items.map((item) => `<tr class="filter-row">\n${renderCells(item)}\n    </tr>`).join('\n');
+  return `<table><thead><tr>${headHtml}</tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderDeadCssTable(deadClasses, helpers) {
   const { escapeHtml, formatFileLinks, formatTestBadge } = helpers;
-  const rows = deadClasses
-    .map(
-      (d) => `<tr class="filter-row">
-      <td class="col-loc">${formatFileLinks(d.relPath)}</td>
+  return renderCssTable(
+    deadClasses,
+    '<th>CSS Location</th><th>Selector</th><th>Est. Saved</th><th>Unit Test Check</th><th>Action</th>',
+    (d) => `      <td class="col-loc">${formatFileLinks(d.relPath)}</td>
       <td class="col-sel"><code>${escapeHtml(d.selector)}</code></td>
       <td class="num">~${escapeHtml(formatBytes(d.estBytes))}</td>
       <td class="col-badge">${formatTestBadge(d.specRefs)}</td>
-      <td class="col-util">${formatDeadCssAction(d, helpers)}</td>
-    </tr>`,
-    )
-    .join('\n');
-  return `<table><thead><tr><th>CSS Location</th><th>Selector</th><th>Est. Saved</th><th>Unit Test Check</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>`;
+      <td class="col-util">${formatDeadCssAction(d, helpers)}</td>`,
+  );
 }
 
 function renderShortStaticTable(shortRules, { escapeHtml, formatFileLinks, formatTestBadge }) {
-  if (shortRules.length === 0) {
-    return '<p class="muted">None detected.</p>';
-  }
-  const rows = shortRules
-    .map(
-      (r) => `<tr class="filter-row">
-      <td class="col-loc">${formatFileLinks(r.relPath)}</td>
+  return renderCssTable(
+    shortRules,
+    '<th>CSS Location</th><th>HTML Location</th><th>Selector</th><th>Inline Utilities to HTML</th><th>Est. Saved</th><th>Unit Test Check</th>',
+    (r) => `      <td class="col-loc">${formatFileLinks(r.relPath)}</td>
       <td class="col-loc">${formatFileLinks(r.htmlLocations)}</td>
       <td class="col-sel"><code>${escapeHtml(r.selector)}</code></td>
       <td class="col-util"><code>${escapeHtml(r.utilities)}</code></td>
       <td class="num">~${escapeHtml(formatBytes(r.estBytes))}</td>
-      <td class="col-badge">${formatTestBadge(r.specRefs)}</td>
-    </tr>`,
-    )
-    .join('\n');
-  return `<table><thead><tr><th>CSS Location</th><th>HTML Location</th><th>Selector</th><th>Inline Utilities to HTML</th><th>Est. Saved</th><th>Unit Test Check</th></tr></thead><tbody>${rows}</tbody></table>`;
+      <td class="col-badge">${formatTestBadge(r.specRefs)}</td>`,
+  );
 }
 
 function renderPartialStaticTable(partialRules, { escapeHtml, formatFileLinks, formatTestBadge }) {
-  if (partialRules.length === 0) {
-    return '<p class="muted">None detected.</p>';
-  }
   const note =
-    "<p class=\"small-ref\"><strong>Note:</strong> When moving classes to <code>.html</code>, move or keep matching <code>x:*</code> pairs together (e.g., <code>grid-cols-*</code> with <code>md:grid-cols-*</code>, <code>border-*</code> with <code>focus:border-*</code>) so <code>.css</code> styles don't override <code>.html</code> classes.</p>";
-  const rows = partialRules
-    .map(
-      (p) => `<tr class="filter-row">
-      <td class="col-loc">${formatFileLinks(p.relPath)}</td>
+    partialRules.length > 0
+      ? '<p class="small-ref"><strong>Note:</strong> When moving classes to <code>.html</code>, move or keep matching <code>x:*</code> pairs together (e.g., <code>grid-cols-*</code> with <code>md:grid-cols-*</code>, <code>border-*</code> with <code>focus:border-*</code>) so <code>.css</code> styles don\'t override <code>.html</code> classes.</p>'
+      : '';
+  return `${note}${renderCssTable(
+    partialRules,
+    '<th>CSS Location</th><th>HTML Location</th><th>Selector</th><th>HTML Class Update</th><th>Keep in CSS</th><th>Est. Saved</th><th>Unit Test Check</th>',
+    (p) => `      <td class="col-loc">${formatFileLinks(p.relPath)}</td>
       <td class="col-loc">${formatFileLinks(p.htmlLocations)}</td>
       <td class="col-sel"><code>${escapeHtml(p.selector)}</code></td>
       <td class="col-util">Keep <code>${escapeHtml(p.className)}</code> + add <code>${escapeHtml(p.moveToHtml)}</code></td>
       <td class="col-util"><code>${escapeHtml(p.keepInCss)}</code></td>
       <td class="num">~${escapeHtml(formatBytes(p.estBytes))}</td>
-      <td class="col-badge">${formatTestBadge(p.specRefs)}</td>
-    </tr>`,
-    )
-    .join('\n');
-  return `${note}<table><thead><tr><th>CSS Location</th><th>HTML Location</th><th>Selector</th><th>HTML Class Update</th><th>Keep in CSS</th><th>Est. Saved</th><th>Unit Test Check</th></tr></thead><tbody>${rows}</tbody></table>`;
+      <td class="col-badge">${formatTestBadge(p.specRefs)}</td>`,
+  )}`;
 }
 
 function renderDuplicateRulesTable(duplicateRules, { escapeHtml, formatFileLinks, formatTestBadge }) {
-  if (duplicateRules.length === 0) {
-    return '<p class="muted">None detected.</p>';
-  }
-  const rows = duplicateRules
-    .map(
-      (d) => `<tr class="filter-row">
-      <td class="col-loc">${formatFileLinks(d.relPath)}</td>
+  return renderCssTable(
+    duplicateRules,
+    '<th>CSS Location</th><th>HTML Location</th><th>Selectors</th><th>Consolidated CSS &amp; HTML Fix</th><th>Est. Saved</th><th>Unit Test Check</th>',
+    (d) => `      <td class="col-loc">${formatFileLinks(d.relPath)}</td>
       <td class="col-loc">${formatFileLinks(d.htmlLocations)}</td>
       <td class="col-sel"><code>${escapeHtml(d.selectors)}</code> (${d.sharedCount} shared)</td>
       <td class="col-util"><code>${escapeHtml(d.fixCss)}</code><div class="small-ref">${escapeHtml(d.unsharedHint)}</div></td>
       <td class="num">~${escapeHtml(formatBytes(d.estBytes))}</td>
-      <td class="col-badge">${formatTestBadge(d.specRefs)}</td>
-    </tr>`,
-    )
-    .join('\n');
-  return `<table><thead><tr><th>CSS Location</th><th>HTML Location</th><th>Selectors</th><th>Consolidated CSS &amp; HTML Fix</th><th>Est. Saved</th><th>Unit Test Check</th></tr></thead><tbody>${rows}</tbody></table>`;
+      <td class="col-badge">${formatTestBadge(d.specRefs)}</td>`,
+  );
 }
 
 export function renderCssSections(cssAnalysis = {}, helpers) {
-  const { escapeHtml } = helpers;
   const {
     postcssRecommendation = null,
     deadClasses = [],
@@ -158,7 +143,9 @@ export function renderCssSections(cssAnalysis = {}, helpers) {
     partialStaticRules = [],
     duplicateRules = [],
   } = cssAnalysis;
-  const postcssBanner = postcssRecommendation ? `<p>💡 <strong>${escapeHtml(postcssRecommendation)}</strong></p>` : '';
+  const postcssBanner = postcssRecommendation
+    ? `<p>💡 <strong>${helpers.escapeHtml(postcssRecommendation)}</strong></p>`
+    : '';
   return `${postcssBanner}<details open>
       <summary>1. Dead / Unused CSS &amp; Vanilla Rules (${deadClasses.length})</summary>
       ${renderDeadCssTable(deadClasses, helpers)}

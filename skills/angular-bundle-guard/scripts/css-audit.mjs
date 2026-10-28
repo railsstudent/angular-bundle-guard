@@ -20,26 +20,33 @@ function extractSelectorClassNames(selector) {
 }
 
 function seedGlobalCssSet(cssByRelPath, projectConfig = {}) {
-  const configured = (projectConfig.globalStyles || []).map((s) => path.normalize(s)).filter((s) => cssByRelPath.has(s));
-  if (configured.length > 0) return new Set(configured);
+  const configured = (projectConfig.globalStyles || [])
+    .map((s) => path.normalize(s))
+    .filter((s) => cssByRelPath.has(s));
+  if (configured.length > 0) {
+    return new Set(configured);
+  }
   const appPrefix = `${path.join(projectConfig.relSourceRoot || 'src', 'app')}${path.sep}`;
   return new Set([...cssByRelPath.keys()].filter((rel) => !rel.startsWith(appPrefix)));
 }
 
 function collectGlobalCssFiles(allCodeFiles, projectConfig = {}) {
-  const cssByRelPath = new Map(allCodeFiles.filter((f) => f.file.endsWith('.css')).map((f) => [path.relative(rootDir, f.file), f]));
+  const cssByRelPath = new Map(
+    allCodeFiles.filter((f) => f.file.endsWith('.css')).map((f) => [path.relative(rootDir, f.file), f]),
+  );
   const globalFiles = seedGlobalCssSet(cssByRelPath, projectConfig);
   const queue = [...globalFiles];
   while (queue.length > 0) {
     const currentRel = queue.shift();
     const fileObj = cssByRelPath.get(currentRel);
-    if (!fileObj) continue;
-    for (const match of fileObj.content.matchAll(/@import\s+['"](\.[^'"]+)['"]/g)) {
-      const resolvedRel = path.normalize(path.join(path.dirname(currentRel), match[1]));
-      const withExt = resolvedRel.endsWith('.css') ? resolvedRel : `${resolvedRel}.css`;
-      if (cssByRelPath.has(withExt) && !globalFiles.has(withExt)) {
-        globalFiles.add(withExt);
-        queue.push(withExt);
+    if (fileObj) {
+      for (const match of fileObj.content.matchAll(/@import\s+['"](\.[^'"]+)['"]/g)) {
+        const resolvedRel = path.normalize(path.join(path.dirname(currentRel), match[1]));
+        const withExt = resolvedRel.endsWith('.css') ? resolvedRel : `${resolvedRel}.css`;
+        if (cssByRelPath.has(withExt) && !globalFiles.has(withExt)) {
+          globalFiles.add(withExt);
+          queue.push(withExt);
+        }
       }
     }
   }
@@ -51,12 +58,13 @@ function getGlobalCssMeta(allCodeFiles, projectConfig = {}) {
   const globalClassNames = new Set();
   for (const relPath of globalFiles) {
     const globalFile = cssByRelPath.get(relPath);
-    if (!globalFile) continue;
-    const clean = stripKeyframesBlocks(globalFile.content.replace(/\/\*[\s\S]*?\*\//g, ' '));
-    for (const match of clean.matchAll(/([^{};]+)\{[^{}]+\}/g)) {
-      const selector = match[1].trim();
-      if (!selector.startsWith('@') || selector.startsWith('@utility')) {
-        extractSelectorClassNames(selector).forEach((cls) => globalClassNames.add(cls));
+    if (globalFile) {
+      const clean = stripKeyframesBlocks(globalFile.content.replace(/\/\*[\s\S]*?\*\//g, ' '));
+      for (const match of clean.matchAll(/([^{};]+)\{[^{}]+\}/g)) {
+        const selector = match[1].trim();
+        if (!selector.startsWith('@') || selector.startsWith('@utility')) {
+          extractSelectorClassNames(selector).forEach((cls) => globalClassNames.add(cls));
+        }
       }
     }
   }
@@ -66,15 +74,22 @@ function getGlobalCssMeta(allCodeFiles, projectConfig = {}) {
 function matchLineRefs(regex, files) {
   return files
     .flatMap((f) => {
-      if (!regex.test(f.content)) return [];
-      const lines = f.content.split('\n').map((line, idx) => (regex.test(line) ? idx + 1 : 0)).filter(Boolean);
+      if (!regex.test(f.content)) {
+        return [];
+      }
+      const lines = f.content
+        .split('\n')
+        .map((line, idx) => (regex.test(line) ? idx + 1 : 0))
+        .filter(Boolean);
       return lines.length > 0 ? [`${path.relative(rootDir, f.file)}:${lines.join(',')}`] : [];
     })
     .join(', ');
 }
 
 function buildClassTokenRegex(className) {
-  return new RegExp(`(?<![a-zA-Z0-9_/-])${className}(?![a-zA-Z0-9_-]|\\.(?:component|directive|pipe|service|module|html|css|scss|ts|spec)\\b)`);
+  return new RegExp(
+    `(?<![a-zA-Z0-9_/-])${className}(?![a-zA-Z0-9_-]|\\.(?:component|directive|pipe|service|module|html|css|scss|ts|spec)\\b)`,
+  );
 }
 
 function findFileLineRefs(className, files) {
@@ -87,7 +102,9 @@ function findCssApplyRefs(className, cssFiles) {
 
 function isClassUsedByPrefix(cls, files) {
   const dashIdx = cls.lastIndexOf('-');
-  if (dashIdx <= 0) return false;
+  if (dashIdx <= 0) {
+    return false;
+  }
   const escapedPrefix = cls.slice(0, dashIdx + 1).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const prefixRegex = new RegExp(`(?<![a-zA-Z0-9_-])${escapedPrefix}(?:\\$\\{|['"]\\s*\\+)`);
   return files.some((f) => prefixRegex.test(f.content));
@@ -138,13 +155,14 @@ function getComponentDirsForCss(cssFile, allCodeFiles) {
   const base = path.basename(normalizedCss);
   const dirs = new Set();
   for (const f of allCodeFiles) {
-    if (!f.file.endsWith('.ts') || f.file.endsWith('.spec.ts') || !f.content.includes(base)) continue;
-    const tsDir = path.dirname(f.file);
-    const hasRelRef = [...f.content.matchAll(/['"]([^'"]+\.css)['"]/g)].some(
-      (m) => path.resolve(tsDir, m[1]) === normalizedCss,
-    );
-    if (tsDir === dir || hasRelRef) {
-      dirs.add(tsDir);
+    if (f.file.endsWith('.ts') && !f.file.endsWith('.spec.ts') && f.content.includes(base)) {
+      const tsDir = path.dirname(f.file);
+      const hasRelRef = [...f.content.matchAll(/['"]([^'"]+\.css)['"]/g)].some(
+        (m) => path.resolve(tsDir, m[1]) === normalizedCss,
+      );
+      if (tsDir === dir || hasRelRef) {
+        dirs.add(tsDir);
+      }
     }
   }
   return dirs;
@@ -170,7 +188,10 @@ function createScanState({ cssFile, relPath, clean, allCodeFiles, allRuntimeFile
     allTsFiles: allCodeFiles.filter(isTs),
     allSpecFiles: allCodeFiles.filter((f) => f.file.endsWith('.spec.ts')),
     allCssFiles: allCodeFiles.filter(
-      (f) => f.file.endsWith('.css') && f.file !== cssFile && isActiveCssFile(f.file, allCodeFiles, globalCssMeta.globalFiles),
+      (f) =>
+        f.file.endsWith('.css') &&
+        f.file !== cssFile &&
+        isActiveCssFile(f.file, allCodeFiles, globalCssMeta.globalFiles),
     ),
     extractSelectorClassNames,
     findFileLineRefs,
@@ -204,21 +225,20 @@ function scanCssRules(clean, relPath, state) {
   for (const match of noKeyframes.matchAll(/([^{};]+)\{([^{}]+)\}/g)) {
     const selector = match[1].trim();
     const body = match[2].trim();
-    if (selector.startsWith('@') && !selector.startsWith('@utility')) {
-      continue;
-    }
-    const line = noKeyframes.slice(0, match.index + match[1].search(/\S/)).split('\n').length;
-    const loc = `${relPath}:${line}`;
-    const deadInRule = findDeadClassesInRule({
-      selector,
-      classNames: extractSelectorClassNames(selector),
-      bodyLength: body.length,
-      relPath: loc,
-      state,
-    });
-    state.deadClasses.push(...deadInRule);
-    if (deadInRule.length === 0 && !conditionalOffsets.has(match.index)) {
-      processApplyRule({ selector, body, relPath: loc, state });
+    if (!selector.startsWith('@') || selector.startsWith('@utility')) {
+      const line = noKeyframes.slice(0, match.index + match[1].search(/\S/)).split('\n').length;
+      const loc = `${relPath}:${line}`;
+      const deadInRule = findDeadClassesInRule({
+        selector,
+        classNames: extractSelectorClassNames(selector),
+        bodyLength: body.length,
+        relPath: loc,
+        state,
+      });
+      state.deadClasses.push(...deadInRule);
+      if (deadInRule.length === 0 && !conditionalOffsets.has(match.index)) {
+        processApplyRule({ selector, body, relPath: loc, state });
+      }
     }
   }
 }
@@ -232,50 +252,54 @@ function scanCssFile({ cssFile, allCodeFiles, allRuntimeFiles, globalCssMeta }) 
 
   if (!state.isGlobal && !state.hasReferencingComponent) {
     state.deadClasses.push({
-      relPath: `${relPath}:1`, selector: '(entire file)', className: base,
-      estBytes: clean.length, specRefs: '', cssApplyRefs: '', isOrphanFile: true,
+      relPath: `${relPath}:1`,
+      selector: '(entire file)',
+      className: base,
+      estBytes: clean.length,
+      specRefs: '',
+      cssApplyRefs: '',
+      isOrphanFile: true,
     });
   } else {
     scanCssRules(clean, relPath, state);
   }
   return {
-    deadClasses: state.deadClasses, shortStaticRules: state.shortStaticRules,
-    partialStaticRules: state.partialStaticRules, remainingApplyRules: state.remainingApplyRules,
+    deadClasses: state.deadClasses,
+    shortStaticRules: state.shortStaticRules,
+    partialStaticRules: state.partialStaticRules,
+    remainingApplyRules: state.remainingApplyRules,
     duplicateRules: findDuplicatesInSameFile(state),
   };
 }
 
 export function getCssAnalysis({ allCodeFiles, outputEntries = [], statsFile, projectConfig = {} }) {
-  const cssFiles = allCodeFiles.filter((f) => f.file.endsWith('.css')).map((f) => f.file);
-  const globalCssMeta = getGlobalCssMeta(allCodeFiles, projectConfig);
+  const { globalFiles, cssByRelPath, globalClassNames } = getGlobalCssMeta(allCodeFiles, projectConfig);
   const allRuntimeFiles = allCodeFiles.filter((f) => !f.file.endsWith('.spec.ts') && !f.file.endsWith('.css'));
   const activeFiles = allCodeFiles.filter(
-    (f) => !f.file.endsWith('.spec.ts') && (!f.file.endsWith('.css') || isActiveCssFile(f.file, allCodeFiles, globalCssMeta.globalFiles)),
+    (f) =>
+      !f.file.endsWith('.spec.ts') && (!f.file.endsWith('.css') || isActiveCssFile(f.file, allCodeFiles, globalFiles)),
   );
-  const activeCssFiles = activeFiles.filter((f) => f.file.endsWith('.css'));
   const { allKeyframes, globalUtilitiesByKeyframe, deadKeyframes, validCustomKeyframes } = extractAndAuditKeyframes(
-    activeCssFiles,
-    globalCssMeta.globalFiles,
+    activeFiles.filter((f) => f.file.endsWith('.css')),
+    globalFiles,
   );
+  const themeAuditIssues = auditThemeTokensAndVars({ globalFiles, cssByRelPath, activeFiles, validCustomKeyframes });
   const result = {
     postcssRecommendation: getPostcssBaseRecommendation(projectConfig),
     componentCss: statsFile ? buildComponentCssRows({ outputEntries, statsFile, projectConfig, allCodeFiles }) : null,
-    deadClasses: [
-      ...auditThemeTokensAndVars({
-        globalFiles: globalCssMeta.globalFiles,
-        cssByRelPath: globalCssMeta.cssByRelPath,
-        activeFiles,
-        validCustomKeyframes,
-      }),
-      ...deadKeyframes,
-    ],
+    deadClasses: [...themeAuditIssues, ...deadKeyframes],
     shortStaticRules: [],
     partialStaticRules: [],
     duplicateRules: [],
   };
   const allRemainingRules = [];
-  for (const cssFile of cssFiles) {
-    const r = scanCssFile({ cssFile, allCodeFiles, allRuntimeFiles, globalCssMeta });
+  for (const cssFile of cssByRelPath.values()) {
+    const r = scanCssFile({
+      cssFile: cssFile.file,
+      allCodeFiles,
+      allRuntimeFiles,
+      globalCssMeta: { globalFiles, cssByRelPath, globalClassNames },
+    });
     result.deadClasses.push(...r.deadClasses);
     result.shortStaticRules.push(...r.shortStaticRules);
     result.partialStaticRules.push(...r.partialStaticRules);

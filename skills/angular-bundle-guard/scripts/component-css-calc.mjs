@@ -48,26 +48,27 @@ function resolveComponentCssSourcePath(data) {
   return path.normalize(rawKey);
 }
 
+function parseStyleBlockEntry(strMatch) {
+  const styleBody = strMatch[1] ?? strMatch[2] ?? strMatch[3] ?? '';
+  const propIdx = styleBody.indexOf('@property');
+  const totalBytes = Buffer.byteLength(styleBody, 'utf8');
+  return {
+    raw: styleBody,
+    totalBytes,
+    rulesBytes: propIdx !== -1 ? Buffer.byteLength(styleBody.slice(0, propIdx), 'utf8') : totalBytes,
+    propertyBytes: propIdx !== -1 ? Buffer.byteLength(styleBody.slice(propIdx), 'utf8') : 0,
+  };
+}
+
 function collectEmbeddedStyleBlocks(browserDir, outputEntries) {
   const blocks = [];
   for (const [name] of outputEntries) {
-    if (!name.endsWith('.js')) {
-      continue;
-    }
-    const content = readTextFile(path.join(browserDir, name));
-    if (!content) {
-      continue;
-    }
-    for (const arrMatch of content.matchAll(/styles:\s*\[((?:`[^`]*`|"[^"]*"|'[^']*'|\s|,)+)\]/g)) {
-      for (const strMatch of arrMatch[1].matchAll(/`([^`]*)`|"([^"]*)"|'([^']*)'/g)) {
-        const styleBody = strMatch[1] ?? strMatch[2] ?? strMatch[3] ?? '';
-        const propIdx = styleBody.indexOf('@property');
-        blocks.push({
-          raw: styleBody,
-          totalBytes: Buffer.byteLength(styleBody, 'utf8'),
-          rulesBytes: propIdx !== -1 ? Buffer.byteLength(styleBody.slice(0, propIdx), 'utf8') : Buffer.byteLength(styleBody, 'utf8'),
-          propertyBytes: propIdx !== -1 ? Buffer.byteLength(styleBody.slice(propIdx), 'utf8') : 0,
-        });
+    if (name.endsWith('.js')) {
+      const content = readTextFile(path.join(browserDir, name)) || '';
+      for (const arrMatch of content.matchAll(/styles:\s*\[((?:`[^`]*`|"[^"]*"|'[^']*'|\s|,)+)\]/g)) {
+        for (const strMatch of arrMatch[1].matchAll(/`([^`]*)`|"([^"]*)"|'([^']*)'/g)) {
+          blocks.push(parseStyleBlockEntry(strMatch));
+        }
       }
     }
   }
@@ -89,9 +90,8 @@ function extractFirstSelectorsFromSource(sourceContent) {
 
 function matchEmbeddedBlockForCss(sourceContent, compiledBytes, embeddedBlocks) {
   const selectors = extractFirstSelectorsFromSource(sourceContent);
-  const candidates = selectors.length > 0
-    ? embeddedBlocks.filter((b) => selectors.slice(0, 3).every((sel) => b.raw.includes(sel)))
-    : [];
+  const candidates =
+    selectors.length > 0 ? embeddedBlocks.filter((b) => selectors.slice(0, 3).every((sel) => b.raw.includes(sel))) : [];
   const pool = candidates.length > 0 ? candidates : embeddedBlocks;
   let best = null;
   let bestDiff = Infinity;
@@ -124,7 +124,7 @@ function findTriggeringUtilitiesInSource(sourceContent) {
   for (let idx = 0; idx < lines.length; idx = idx + 1) {
     const line = lines[idx];
     for (const match of line.matchAll(/@apply\s+([^;]+);/g)) {
-      const utils = match[1].trim().split(/\s+/).filter(Boolean);
+      const utils = match[1].trim().split(/\s+/);
       for (const util of utils) {
         if (isPropertyTriggerUtility(util)) {
           const list = found.get(util) || [];
@@ -140,7 +140,7 @@ function findTriggeringUtilitiesInSource(sourceContent) {
   }));
 }
 
-function buildComponentCssEntry(outputName, data, codeByRel, embeddedBlocks) {
+function buildComponentCssEntry({ outputName, data, codeByRel, embeddedBlocks }) {
   const relPath = resolveComponentCssSourcePath(data) || outputName;
   const sourceContent = codeByRel.get(relPath) || '';
   const triggers = findTriggeringUtilitiesInSource(sourceContent);
@@ -170,7 +170,7 @@ export function buildComponentCssRows({ outputEntries, statsFile, projectConfig,
       if (!isComponentCssOutput(outputName, data, projectConfig)) {
         return acc;
       }
-      const entry = buildComponentCssEntry(outputName, data, codeByRel, embeddedBlocks);
+      const entry = buildComponentCssEntry({ outputName, data, codeByRel, embeddedBlocks });
       acc.files.push(entry);
       if (entry.isSmall) {
         acc.smallCount += 1;

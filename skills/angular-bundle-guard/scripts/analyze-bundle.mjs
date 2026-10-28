@@ -91,24 +91,34 @@ function printOutputChunks(chunkRows) {
   });
 }
 
-function printMainBreakdown([mainName, mainData], sortedInputs, relSourceRoot = 'src') {
-  const mainBytes = mainData.bytes;
+function printMainBreakdown(mainEntry, inputEntries, relSourceRoot = 'src') {
+  if (!mainEntry) {
+    console.log('\n[analyze-bundle] Notice: No main-*.js bundle found in outputs.');
+    return;
+  }
+  const [mainName, { bytes: mainBytes }] = mainEntry;
+  const { inputs, groups } = inputEntries.reduce(
+    (acc, entry) => {
+      const [inputPath, { bytesInOutput }] = entry;
+      if (bytesInOutput > 0) {
+        acc.inputs.push(entry);
+        const groupName = categorizeInput(inputPath, relSourceRoot);
+        acc.groups.set(groupName, (acc.groups.get(groupName) || 0) + bytesInOutput);
+      }
+      return acc;
+    },
+    { inputs: [], groups: new Map() },
+  );
   console.log('\n------------------------------------------------------');
   console.log(`Main Bundle Breakdown: ${mainName} (${formatBytes(mainBytes)} / ${mainBytes.toLocaleString()} bytes)`);
   console.log('------------------------------------------------------');
 
   printLimitedList({
-    items: sortedInputs,
+    items: inputs.sort((a, b) => b[1].bytesInOutput - a[1].bytesInOutput),
     label: 'Top Input Contributors in Main',
     unitName: 'inputs',
     formatRow: formatPercentageRow,
   });
-
-  const groups = new Map();
-  for (const [inputPath, val] of sortedInputs) {
-    const groupName = categorizeInput(inputPath, relSourceRoot);
-    groups.set(groupName, (groups.get(groupName) || 0) + val.bytesInOutput);
-  }
 
   printLimitedList({
     items: [...groups.entries()].sort((a, b) => b[1] - a[1]),
@@ -224,18 +234,17 @@ function executeFullAudit(projectConfig, hash, reportPath) {
   const mainEntry = outputEntries.find(([name]) => name.startsWith('main-') && name.endsWith('.js'));
   const allCodeFiles = loadSourceFilesWithContent(projectConfig.sourceRoot, ['.html', '.ts', '.css']);
   const inputEntries = mainEntry ? Object.entries(mainEntry[1].inputs || {}) : [];
-  if (!mainEntry) {
-    console.log('\n[analyze-bundle] Notice: No main-*.js bundle found in outputs.');
-  } else {
-    const sortedInputs = inputEntries
-      .filter(([, val]) => val.bytesInOutput > 0)
-      .sort((a, b) => b[1].bytesInOutput - a[1].bytesInOutput);
-    printMainBreakdown(mainEntry, sortedInputs, projectConfig.relSourceRoot);
-  }
+  printMainBreakdown(mainEntry, inputEntries, projectConfig.relSourceRoot);
 
-  const auditResults = runAuditsAndCollectData({ allCodeFiles, outputEntries, inputEntries, statsFile, projectConfig, reportPath });
+  const auditResults = runAuditsAndCollectData({
+    allCodeFiles,
+    outputEntries,
+    inputEntries,
+    statsFile,
+    projectConfig,
+    reportPath,
+  });
   console.log = origLog;
-  const summaryText = logLines.join('\n');
   const { componentCss } = auditResults.cssAnalysis;
   const componentCssNames = new Set((componentCss?.files || []).map((f) => f.outputName));
   const chunks = chunkRows.filter((c) => !componentCssNames.has(c.name));
@@ -243,7 +252,7 @@ function executeFullAudit(projectConfig, hash, reportPath) {
     reportPath,
     hash,
     projectConfig,
-    summaryText,
+    summaryText: logLines.join('\n'),
     auditData: { chunks, componentCss, ...auditResults },
   });
   console.log(`[HTML Report] Generated: ${reportPath}\n`);
@@ -264,4 +273,3 @@ if (cachedSummary) {
   ensureFreshStats(forceRebuild, projectConfig);
   executeFullAudit(projectConfig, hash, reportPath);
 }
-

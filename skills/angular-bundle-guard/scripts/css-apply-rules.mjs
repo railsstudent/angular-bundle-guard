@@ -45,7 +45,7 @@ function inspectLineClassUsage(line, { className, isFullMove, moveCount }) {
   let fits = false;
   let maxClasses = 0;
   for (const match of line.matchAll(/(?<!\[)\bclass\s*=\s*"([^"]*)"/g)) {
-    const classes = match[1].trim().split(/\s+/).filter(Boolean);
+    const classes = match[1].trim().split(/\s+/);
     if (classes.includes(className)) {
       matched = true;
       maxClasses = Math.max(maxClasses, classes.length);
@@ -159,14 +159,16 @@ function buildEngineerChoiceSplit({ base, utilities, freeHtmlSlots, moveCount })
   };
 }
 
+function canClassifyStaticApplyRule({ className, utilities, state, isFullMove }) {
+  return (
+    isEligibleForHtmlMove({ className, utilities, state }) && utilities.length > 0 && (!state.isGlobal || isFullMove)
+  );
+}
+
 export function classifyStaticApplyRule({ selector, utilities, relPath, state, hasNonApplyCss = false }) {
   const className = extractApplyClassName(selector, state.isGlobal);
   const isFullMove = !state.multiRuleClasses.has(className) && !hasNonApplyCss;
-  const canProcess =
-    isEligibleForHtmlMove({ className, utilities, state }) &&
-    utilities.length > 0 &&
-    (!state.isGlobal || isFullMove);
-  if (!canProcess) {
+  if (!canClassifyStaticApplyRule({ className, utilities, state, isFullMove })) {
     return null;
   }
   const { htmlFiles, specFiles } = getRuleTargetFiles(state);
@@ -216,9 +218,7 @@ export function processApplyRule({ selector, body, relPath, state }) {
   if (applyMatches.length === 0) {
     return;
   }
-  const utilities = applyMatches
-    .flatMap((m) => m[1].trim().split(/\s+/))
-    .filter(Boolean);
+  const utilities = applyMatches.flatMap((m) => m[1].trim().split(/\s+/));
   const hasNonApplyCss = body.replace(/@apply\s+[^;]+;/g, '').trim().length > 0;
   if (!state.isGlobal) {
     state.fileApplyBlocks.push({ selector, utilities, loc: relPath });

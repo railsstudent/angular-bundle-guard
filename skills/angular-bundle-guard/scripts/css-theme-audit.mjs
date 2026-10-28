@@ -25,7 +25,10 @@ function extractTailwindPostcssOptions(plugins) {
   const tailwindCssKey = '@tailwindcss/postcss';
   if (Array.isArray(plugins)) {
     const entry = plugins.find((p) => p === tailwindCssKey || (Array.isArray(p) && p[0] === tailwindCssKey));
-    return Array.isArray(entry) ? (entry[1] ?? {}) : entry ? {} : undefined;
+    if (!entry) {
+      return undefined;
+    }
+    return Array.isArray(entry) ? (entry[1] ?? {}) : {};
   }
   return plugins[tailwindCssKey];
 }
@@ -68,6 +71,12 @@ function buildThemeTokenUtilityRegex(tokenName) {
   return new RegExp(`(?:(?<![a-zA-Z0-9_-])|:)(?:${utilPattern}|${tokenName})(?![a-zA-Z0-9_-])`);
 }
 
+const THEME_PREFIX_OVERRIDES = {
+  '--tw-ring-color': 'ring',
+  'ring-color': 'ring',
+  'box-shadow': 'shadow',
+};
+
 export function getSuggestedThemeUtility(utilPrefix, varName, themeTokens) {
   if (!themeTokens.has(varName)) {
     return null;
@@ -87,7 +96,7 @@ export function getSuggestedThemeUtility(utilPrefix, varName, themeTokens) {
   if (!matched) {
     return null;
   }
-  const normalizedPrefix = utilPrefix === '--tw-ring-color' || utilPrefix === 'ring-color' ? 'ring' : utilPrefix === 'box-shadow' ? 'shadow' : utilPrefix;
+  const normalizedPrefix = THEME_PREFIX_OVERRIDES[utilPrefix] || utilPrefix;
   return `${normalizedPrefix}-${varName.slice(matched.length)}`;
 }
 
@@ -95,16 +104,15 @@ function extractThemeTokensFromGlobalFiles(globalFiles, cssByRelPath) {
   const themeTokens = new Map();
   for (const relPath of globalFiles) {
     const fileObj = cssByRelPath.get(relPath);
-    if (!fileObj) {
-      continue;
-    }
-    const clean = fileObj.content.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
-    for (const blockMatch of clean.matchAll(/@theme(?:\s+[a-z-]+)?\s*\{([\s\S]*?)\}/g)) {
-      const blockStart = blockMatch.index + blockMatch[0].indexOf('{') + 1;
-      const blockBody = blockMatch[1];
-      for (const varMatch of blockBody.matchAll(/(--[a-zA-Z0-9_-]+)\s*:/g)) {
-        const line = clean.slice(0, blockStart + varMatch.index).split('\n').length;
-        themeTokens.set(varMatch[1], { relPath: `${relPath}:${line}`, file: fileObj.file, line });
+    if (fileObj) {
+      const clean = fileObj.content.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
+      for (const blockMatch of clean.matchAll(/@theme(?:\s+[a-z-]+)?\s*\{([\s\S]*?)\}/g)) {
+        const blockStart = blockMatch.index + blockMatch[0].indexOf('{') + 1;
+        const blockBody = blockMatch[1];
+        for (const varMatch of blockBody.matchAll(/(--[a-zA-Z0-9_-]+)\s*:/g)) {
+          const line = clean.slice(0, blockStart + varMatch.index).split('\n').length;
+          themeTokens.set(varMatch[1], { relPath: `${relPath}:${line}`, file: fileObj.file, line });
+        }
       }
     }
   }
@@ -129,7 +137,9 @@ function findUnusedThemeTokens(themeTokens, activeFiles) {
   for (const [tokenName, meta] of themeTokens.entries()) {
     const usageRegex = buildThemeTokenUtilityRegex(tokenName);
     const isUsed = activeFiles.some((f) =>
-      f.content.split('\n').some((line, idx) => !(f.file === meta.file && idx + 1 === meta.line) && usageRegex.test(line)),
+      f.content
+        .split('\n')
+        .some((line, idx) => !(f.file === meta.file && idx + 1 === meta.line) && usageRegex.test(line)),
     );
     if (!isUsed) {
       findings.push({
@@ -147,36 +157,26 @@ function findUnusedThemeTokens(themeTokens, activeFiles) {
 }
 
 function inspectParenthesizedVarMatch({ match, loc, themeTokens, definedVars }) {
-  const fullUtil = match[0];
-  const utilPrefix = match[1];
-  const varName = match[2];
+  const [fullUtil, utilPrefix, varName] = match;
   const suggested = getSuggestedThemeUtility(utilPrefix, varName, themeTokens);
+  if (!suggested && definedVars.has(varName) && !loc.includes('.css:')) {
+    return null;
+  }
+  let themeIssueAction = `Broken CSS variable: <code>${varName}</code> in <code>${fullUtil}</code> is not defined in any CSS file.`;
   if (suggested) {
-    return {
-      relPath: loc,
-      selector: fullUtil,
-      className: fullUtil,
-      estBytes: 30,
-      specRefs: '',
-      cssApplyRefs: '',
-      themeIssueAction: `Replace <code>${fullUtil}</code> with native <code>@theme</code> utility <code>${suggested}</code>.`,
-    };
+    themeIssueAction = `Replace <code>${fullUtil}</code> with native <code>@theme</code> utility <code>${suggested}</code>.`;
+  } else if (definedVars.has(varName)) {
+    themeIssueAction = `Move <code>${varName}</code> into <code>@theme static</code> in <code>styles.css</code> and replace <code>${fullUtil}</code> with a standard Tailwind utility.`;
   }
-  const action = definedVars.has(varName)
-    ? `Move <code>${varName}</code> into <code>@theme static</code> in <code>styles.css</code> and replace <code>${fullUtil}</code> with a standard Tailwind utility.`
-    : `Broken CSS variable: <code>${varName}</code> in <code>${fullUtil}</code> is not defined in any CSS file.`;
-  if (!definedVars.has(varName) || loc.includes('.css:')) {
-    return {
-      relPath: loc,
-      selector: fullUtil,
-      className: fullUtil,
-      estBytes: 30,
-      specRefs: '',
-      cssApplyRefs: '',
-      themeIssueAction: action,
-    };
-  }
-  return null;
+  return {
+    relPath: loc,
+    selector: fullUtil,
+    className: fullUtil,
+    estBytes: 30,
+    specRefs: '',
+    cssApplyRefs: '',
+    themeIssueAction,
+  };
 }
 
 function findParenthesizedVarIssues(activeFiles, themeTokens, definedVars) {
@@ -216,7 +216,7 @@ export function stripKeyframesBlocks(clean) {
   return clean.replace(/@keyframes\s+[a-zA-Z0-9_-]+\s*\{(?:[^{}]|\{[^{}]*\})*\}/g, (m) => m.replace(/[^\n]/g, ' '));
 }
 
-function isExcludedVanillaRule(selector, prop, val, validCustomKeyframes) {
+function isExcludedVanillaRule({ selector, prop, val, validCustomKeyframes }) {
   if (/::-(?:webkit|ms)-|:-(?:webkit|ms)-/.test(selector)) {
     return true;
   }
@@ -252,34 +252,50 @@ function buildVanillaDeclarationFinding({ loc, selector, prop, val, themeTokens 
       : `Replace with '@apply ${suggested}' or move to .html`;
   } else if (prop === 'backdrop-filter' || prop === 'filter') {
     estBytes = 45;
-    action = 'Convert to Tailwind utility in .html (avoid @apply in component .css, which injects ~1.2 KB @property boilerplate)';
+    action =
+      'Convert to Tailwind utility in .html (avoid @apply in component .css, which injects ~1.2 KB @property boilerplate)';
   }
 
   return {
-    relPath: loc, selector: displaySelector, className: rawDecl, estBytes,
-    specRefs: '', cssApplyRefs: '', action,
+    relPath: loc,
+    selector: displaySelector,
+    className: rawDecl,
+    estBytes,
+    specRefs: '',
+    cssApplyRefs: '',
+    action,
     themeIssueAction: suggested ? `<code>${action}</code>` : action,
   };
 }
 
-export function findVanillaCssAndVarIssues({ activeFiles, globalFiles, themeTokens, validCustomKeyframes = new Set() }) {
+export function findVanillaCssAndVarIssues({
+  activeFiles,
+  globalFiles,
+  themeTokens,
+  validCustomKeyframes = new Set(),
+}) {
   const findings = [];
   for (const f of activeFiles) {
     const relPath = path.relative(rootDir, f.file);
-    if (!f.file.endsWith('.css') || globalFiles.has(relPath)) continue;
-    const clean = stripKeyframesBlocks(f.content.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' ')));
-    for (const ruleMatch of clean.matchAll(/([^{};]+)\{([^{}]+)\}/g)) {
-      const selector = ruleMatch[1].trim().replace(/\s+/g, ' ');
-      if (selector.startsWith('@')) continue;
-      const bodyStart = ruleMatch.index + ruleMatch[0].indexOf('{') + 1;
-      const bodyNoApply = ruleMatch[2].replace(/@apply\s+[^;{}]+;?/g, (m) => m.replace(/[^\n]/g, ' '));
-      for (const declMatch of bodyNoApply.matchAll(/(?:^|[;\n])\s*([a-zA-Z_-]+)\s*:\s*([^;{}]+)/g)) {
-        const prop = declMatch[1].trim();
-        const val = declMatch[2].trim();
-        if (isExcludedVanillaRule(selector, prop, val, validCustomKeyframes)) continue;
-        const propOffset = declMatch.index + declMatch[0].indexOf(declMatch[1]);
-        const line = clean.slice(0, bodyStart + propOffset).split('\n').length;
-        findings.push(buildVanillaDeclarationFinding({ loc: `${relPath}:${line}`, selector, prop, val, themeTokens }));
+    if (f.file.endsWith('.css') && !globalFiles.has(relPath)) {
+      const clean = stripKeyframesBlocks(f.content.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' ')));
+      for (const ruleMatch of clean.matchAll(/([^{};]+)\{([^{}]+)\}/g)) {
+        const selector = ruleMatch[1].trim().replace(/\s+/g, ' ');
+        if (!selector.startsWith('@')) {
+          const bodyStart = ruleMatch.index + ruleMatch[0].indexOf('{') + 1;
+          const bodyNoApply = ruleMatch[2].replace(/@apply\s+[^;{}]+;?/g, (m) => m.replace(/[^\n]/g, ' '));
+          for (const declMatch of bodyNoApply.matchAll(/(?:^|[;\n])\s*([a-zA-Z_-]+)\s*:\s*([^;{}]+)/g)) {
+            const prop = declMatch[1].trim();
+            const val = declMatch[2].trim();
+            if (!isExcludedVanillaRule({ selector, prop, val, validCustomKeyframes })) {
+              const propOffset = declMatch.index + declMatch[0].indexOf(declMatch[1]);
+              const line = clean.slice(0, bodyStart + propOffset).split('\n').length;
+              findings.push(
+                buildVanillaDeclarationFinding({ loc: `${relPath}:${line}`, selector, prop, val, themeTokens }),
+              );
+            }
+          }
+        }
       }
     }
   }
