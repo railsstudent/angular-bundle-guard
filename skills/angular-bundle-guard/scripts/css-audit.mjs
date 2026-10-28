@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { rootDir } from './bundle-utils.mjs';
 import { processApplyRule } from './css-apply-rules.mjs';
@@ -9,14 +8,7 @@ import {
   findIdenticalRulesAcrossFiles,
 } from './css-duplicates.mjs';
 import { auditThemeTokensAndVars, getPostcssBaseRecommendation, stripKeyframesBlocks } from './css-theme-audit.mjs';
-
-export function getSourceFiles(dir, extList) {
-  if (!fs.existsSync(dir)) return [];
-  return fs
-    .readdirSync(dir, { recursive: true, withFileTypes: true })
-    .filter((e) => e.isFile() && extList.some((ext) => e.name.endsWith(ext)))
-    .map((e) => path.join(e.parentPath || e.path, e.name));
-}
+import { buildComponentCssRows } from './component-css-calc.mjs';
 
 function extractSelectorClassNames(selector) {
   if (selector.startsWith('@utility ')) {
@@ -233,7 +225,8 @@ function scanCssRules(clean, relPath, state) {
 
 function scanCssFile({ cssFile, allCodeFiles, allRuntimeFiles, globalCssMeta }) {
   const relPath = path.relative(rootDir, cssFile);
-  const clean = fs.readFileSync(cssFile, 'utf8').replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
+  const rawCss = globalCssMeta.cssByRelPath.get(relPath)?.content ?? '';
+  const clean = rawCss.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
   const state = createScanState({ cssFile, relPath, clean, allCodeFiles, allRuntimeFiles, globalCssMeta });
   const base = path.basename(cssFile);
 
@@ -252,7 +245,8 @@ function scanCssFile({ cssFile, allCodeFiles, allRuntimeFiles, globalCssMeta }) 
   };
 }
 
-export function getCssAnalysis(cssFiles, allCodeFiles, projectConfig = {}) {
+export function getCssAnalysis({ allCodeFiles, outputEntries = [], statsFile, projectConfig = {} }) {
+  const cssFiles = allCodeFiles.filter((f) => f.file.endsWith('.css')).map((f) => f.file);
   const globalCssMeta = getGlobalCssMeta(allCodeFiles, projectConfig);
   const allRuntimeFiles = allCodeFiles.filter((f) => !f.file.endsWith('.spec.ts') && !f.file.endsWith('.css'));
   const activeFiles = allCodeFiles.filter(
@@ -265,6 +259,7 @@ export function getCssAnalysis(cssFiles, allCodeFiles, projectConfig = {}) {
   );
   const result = {
     postcssRecommendation: getPostcssBaseRecommendation(projectConfig),
+    componentCss: statsFile ? buildComponentCssRows({ outputEntries, statsFile, projectConfig, allCodeFiles }) : null,
     deadClasses: [
       ...auditThemeTokensAndVars({
         globalFiles: globalCssMeta.globalFiles,

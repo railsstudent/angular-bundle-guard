@@ -1,11 +1,10 @@
 import crypto from 'node:crypto';
-import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL, URL } from 'node:url';
 import { BUILD_CONFIG_FILES, formatBytes, getConfigSearchDirs, rootDir } from './bundle-utils.mjs';
 import { renderComponentCssSection, renderCssSections } from './component-css-report.mjs';
-import { getSourceFiles } from './css-audit.mjs';
+import { getSourceFiles, readTextFile, setActiveProjectHash, writeTextFile } from './fs-utils.mjs';
 
 const SUMMARY_START = '<!-- BUNDLE_AUDIT_SUMMARY_START\n';
 const SUMMARY_END = '\nBUNDLE_AUDIT_SUMMARY_END -->';
@@ -20,38 +19,40 @@ function escapeHtml(value) {
 
 export function computeProjectHash(projectConfig) {
   const hasher = crypto.createHash('sha256');
-  hasher.update(`project:${projectConfig.projectName}\n`);
+  hasher.update(`root:${path.resolve(projectConfig.projectRoot || rootDir)}\nproject:${projectConfig.projectName}\n`);
 
   for (const dir of getConfigSearchDirs(projectConfig.projectRoot)) {
     for (const cfgName of BUILD_CONFIG_FILES) {
       const cfgPath = path.join(dir, cfgName);
-      if (fs.existsSync(cfgPath)) {
-        hasher.update(`${path.relative(rootDir, cfgPath)}:${fs.readFileSync(cfgPath, 'utf8')}\n`);
+      const cfgContent = readTextFile(cfgPath);
+      if (cfgContent !== null) {
+        hasher.update(`${path.relative(rootDir, cfgPath)}:${cfgContent}\n`);
       }
     }
   }
 
   const scriptDir = path.dirname(new URL(import.meta.url).pathname);
   for (const scriptFile of getSourceFiles(scriptDir, ['.mjs', '.css']).sort()) {
-    hasher.update(`script:${ path.basename(scriptFile) }:${ fs.readFileSync(scriptFile, 'utf8') }\n`);
+    hasher.update(`script:${path.basename(scriptFile)}:${readTextFile(scriptFile) ?? ''}\n`);
   }
 
   const files = getSourceFiles(projectConfig.sourceRoot, ['.ts', '.html', '.css']).sort();
   for (const file of files) {
     const rel = path.relative(rootDir, file);
-    hasher.update(`${rel}:${fs.readFileSync(file, 'utf8')}\n`);
+    hasher.update(`${rel}:${readTextFile(file) ?? ''}\n`);
   }
 
   const hash = hasher.digest('hex').slice(0, 8);
+  setActiveProjectHash(hash);
   const reportPath = path.join(os.tmpdir(), `bundle-audit-report-${hash}.html`);
   return { hash, reportPath };
 }
 
 export function readCachedReport(reportPath) {
-  if (!fs.existsSync(reportPath)) {
+  const content = readTextFile(reportPath);
+  if (content === null) {
     return null;
   }
-  const content = fs.readFileSync(reportPath, 'utf8');
   const startIdx = content.indexOf(SUMMARY_START);
   const endIdx = content.indexOf(SUMMARY_END);
   if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) {
@@ -101,7 +102,7 @@ function renderChunkTable(chunks) {
 
 function renderReportStyles() {
   const cssPath = new URL('./report.css', import.meta.url);
-  const cssContent = fs.readFileSync(cssPath, 'utf8');
+  const cssContent = readTextFile(cssPath) ?? '';
   return `<style>\n${cssContent}</style>`;
 }
 
@@ -174,5 +175,5 @@ ${SUMMARY_START}${summaryText.replaceAll('-->', '--&gt;')}${SUMMARY_END}
 </body>
 </html>`;
 
-  fs.writeFileSync(reportPath, html, 'utf8');
+  writeTextFile(reportPath, html);
 }

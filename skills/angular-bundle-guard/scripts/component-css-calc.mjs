@@ -1,6 +1,6 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { rootDir } from './bundle-utils.mjs';
+import { readTextFile, resolveBrowserDir } from './fs-utils.mjs';
 
 const COMPONENT_CSS_THRESHOLD_BYTES = 1024;
 
@@ -23,7 +23,7 @@ function isPropertyTriggerUtility(utility) {
   return PROPERTY_TRIGGER_PATTERNS.some((pattern) => pattern.test(utility));
 }
 
-export function isComponentCssOutput(name, data, projectConfig = {}) {
+function isComponentCssOutput(name, data, projectConfig = {}) {
   if (!name.endsWith('.css')) {
     return false;
   }
@@ -54,11 +54,10 @@ function collectEmbeddedStyleBlocks(browserDir, outputEntries) {
     if (!name.endsWith('.js')) {
       continue;
     }
-    const chunkPath = path.join(browserDir, name);
-    if (!fs.existsSync(chunkPath)) {
+    const content = readTextFile(path.join(browserDir, name));
+    if (!content) {
       continue;
     }
-    const content = fs.readFileSync(chunkPath, 'utf8');
     for (const arrMatch of content.matchAll(/styles:\s*\[((?:`[^`]*`|"[^"]*"|'[^']*'|\s|,)+)\]/g)) {
       for (const strMatch of arrMatch[1].matchAll(/`([^`]*)`|"([^"]*)"|'([^']*)'/g)) {
         const styleBody = strMatch[1] ?? strMatch[2] ?? strMatch[3] ?? '';
@@ -162,8 +161,7 @@ function buildComponentCssEntry(outputName, data, codeByRel, embeddedBlocks) {
 }
 
 export function buildComponentCssRows({ outputEntries, statsFile, projectConfig, allCodeFiles }) {
-  const statsDir = path.dirname(statsFile);
-  const browserDir = fs.existsSync(path.join(statsDir, 'browser')) ? path.join(statsDir, 'browser') : statsDir;
+  const browserDir = resolveBrowserDir(statsFile);
   const codeByRel = new Map(allCodeFiles.map((f) => [path.relative(rootDir, f.file), f.content]));
   const embeddedBlocks = collectEmbeddedStyleBlocks(browserDir, outputEntries);
 

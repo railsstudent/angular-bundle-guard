@@ -1,6 +1,6 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { getConfigSearchDirs, POSTCSS_CONFIG_FILES, rootDir } from './bundle-utils.mjs';
+import { fileExists, readJsonFile } from './fs-utils.mjs';
 
 const COLOR_PREFIXES = 'bg|text|border|ring|fill|stroke|from|via|to|outline|accent|caret|divide|placeholder';
 const SPACING_PREFIXES =
@@ -10,7 +10,7 @@ function findPostcssConfigFile(projectRoot = rootDir) {
   for (const dir of getConfigSearchDirs(projectRoot)) {
     for (const name of POSTCSS_CONFIG_FILES) {
       const candidate = path.join(dir, name);
-      if (fs.existsSync(candidate)) {
+      if (fileExists(candidate)) {
         return candidate;
       }
     }
@@ -36,8 +36,8 @@ export function getPostcssBaseRecommendation(projectConfig = {}) {
     return null;
   }
   try {
-    const raw = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    const twOpts = extractTailwindPostcssOptions(raw.plugins);
+    const raw = readJsonFile(configPath);
+    const twOpts = extractTailwindPostcssOptions(raw?.plugins);
     if (twOpts && typeof twOpts === 'object' && !twOpts.base) {
       const relConfig = path.relative(rootDir, configPath);
       const targetSrc = projectConfig.sourceRoot || path.join(rootDir, 'src');

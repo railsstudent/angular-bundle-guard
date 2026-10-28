@@ -1,7 +1,7 @@
 import { execSync } from 'node:child_process';
-import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { clearFsCache, fileExists, getFileMtimeMs, getSourceFiles, readJsonFile, readTextFile } from './fs-utils.mjs';
 
 export const rootDir = process.cwd();
 export const DIST_DIR = path.join(rootDir, 'dist');
@@ -9,13 +9,7 @@ export const SRC_DIR = path.join(rootDir, 'src');
 export const CHUNK_DISPLAY_LIMIT = 8;
 
 const ALLOWED_MAIN_PACKAGES = new Set([
-  '@angular/core',
-  '@angular/common',
-  '@angular/platform-browser',
-  '@angular/router',
-  '@angular/service-worker',
-  'rxjs',
-  'tslib',
+  '@angular/core', '@angular/common', '@angular/platform-browser', '@angular/router', '@angular/service-worker', 'rxjs', 'tslib',
 ]);
 
 export const POSTCSS_CONFIG_FILES = ['postcss.config.json', '.postcssrc.json'];
@@ -30,10 +24,10 @@ export function getConfigSearchDirs(projectRoot = rootDir) {
  */
 function getApplicationProjects() {
   const angularJsonPath = path.join(rootDir, 'angular.json');
-  if (!fs.existsSync(angularJsonPath)) {
+  const angularJson = readJsonFile(angularJsonPath);
+  if (!angularJson) {
     return new Map();
   }
-  const angularJson = JSON.parse(fs.readFileSync(angularJsonPath, 'utf8'));
   const entries = Object.entries(angularJson.projects || {}).filter(
     ([, proj]) => proj.projectType === 'application' || Boolean(proj.architect?.build),
   );
@@ -69,12 +63,8 @@ export function resolveProjectConfig(projectArg) {
   const appProjects = getApplicationProjects();
   if (appProjects.size === 0) {
     return {
-      projectName: 'default',
-      projectRoot: rootDir,
-      relSourceRoot: 'src',
-      sourceRoot: SRC_DIR,
-      distDir: DIST_DIR,
-      globalStyles: [path.join('src', 'styles.css')],
+      projectName: 'default', projectRoot: rootDir, relSourceRoot: 'src',
+      sourceRoot: SRC_DIR, distDir: DIST_DIR, globalStyles: [path.join('src', 'styles.css')],
     };
   }
   const projectName = selectTargetProjectName(appProjects, projectArg);
@@ -83,11 +73,8 @@ export function resolveProjectConfig(projectArg) {
   const outOpt = proj.architect?.build?.options?.outputPath;
   const relDist = (typeof outOpt === 'string' ? outOpt : outOpt?.base) || path.join('dist', projectName);
   return {
-    projectName,
-    projectRoot: path.join(rootDir, proj.root || ''),
-    relSourceRoot,
-    sourceRoot: path.join(rootDir, relSourceRoot),
-    distDir: path.join(rootDir, relDist),
+    projectName, projectRoot: path.join(rootDir, proj.root || ''), relSourceRoot,
+    sourceRoot: path.join(rootDir, relSourceRoot), distDir: path.join(rootDir, relDist),
     globalStyles: extractGlobalStyleEntries(proj, relSourceRoot),
   };
 }
@@ -96,65 +83,29 @@ export function resolveProjectConfig(projectArg) {
  * Dynamically locates browser-stats.json or stats.json inside dist/.
  */
 export function findStatsFile(distDir = DIST_DIR) {
-  const searchDir = fs.existsSync(distDir) ? distDir : DIST_DIR;
-  if (!fs.existsSync(searchDir)) {
-    return null;
-  }
-  const entries = fs.readdirSync(searchDir, { recursive: true, withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.isFile() && (entry.name === 'browser-stats.json' || entry.name === 'stats.json')) {
-      const parent = entry.parentPath || entry.path;
-      return path.join(parent, entry.name);
-    }
-  }
-  return null;
+  const searchDir = fileExists(distDir) ? distDir : DIST_DIR;
+  return getSourceFiles(searchDir, ['.json']).find((f) => {
+    const base = path.basename(f);
+    return base === 'browser-stats.json' || base === 'stats.json';
+  }) || null;
 }
 
 function isAnyRootConfigStale(statsMtimeMs) {
-  for (const cfgName of BUILD_CONFIG_FILES) {
-    const cfgPath = path.join(rootDir, cfgName);
-    if (fs.existsSync(cfgPath) && fs.statSync(cfgPath).mtimeMs > statsMtimeMs) {
-      return true;
-    }
-  }
-  return false;
+  return BUILD_CONFIG_FILES.some((cfgName) => getFileMtimeMs(path.join(rootDir, cfgName)) > statsMtimeMs);
 }
 
 /**
  * Checks if any file in sourceRoot or root build configs has an mtimeMs greater than the given timestamp.
  */
 function isStatsStale(statsMtimeMs, sourceRoot = SRC_DIR) {
-  if (isAnyRootConfigStale(statsMtimeMs)) {
-    return true;
-  }
-  if (!fs.existsSync(sourceRoot)) {
-    return false;
-  }
-  const entries = fs.readdirSync(sourceRoot, { recursive: true, withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.isFile()) {
-      const fullPath = path.join(entry.parentPath || entry.path, entry.name);
-      try {
-        if (fs.statSync(fullPath).mtimeMs > statsMtimeMs) {
-          return true;
-        }
-      } catch {
-        // Ignore unreadable or transient files
-      }
-    }
-  }
-  return false;
+  return isAnyRootConfigStale(statsMtimeMs) || getSourceFiles(sourceRoot).some((fullPath) => getFileMtimeMs(fullPath) > statsMtimeMs);
 }
 
 function getBuildReason(forceRebuild, distDir, sourceRoot) {
-  if (forceRebuild) {
-    return 'Forced rebuild requested (--rebuild).';
-  }
+  if (forceRebuild) return 'Forced rebuild requested (--rebuild).';
   const existingStats = findStatsFile(distDir);
-  if (!existingStats) {
-    return 'browser-stats.json is missing.';
-  }
-  if (isStatsStale(fs.statSync(existingStats).mtimeMs, sourceRoot)) {
+  if (!existingStats) return 'browser-stats.json is missing.';
+  if (isStatsStale(getFileMtimeMs(existingStats), sourceRoot)) {
     return `Source files in ${path.relative(rootDir, sourceRoot) || 'src'} are newer than browser-stats.json.`;
   }
   return null;
@@ -175,6 +126,7 @@ export function ensureFreshStats(forceRebuild, projectConfig = {}) {
   console.log(`\n[analyze-bundle] ${reason}\n[analyze-bundle] Executing "${buildCmd}" to generate fresh stats...\n`);
   try {
     execSync(buildCmd, { cwd: rootDir, stdio: 'inherit', env: process.env });
+    clearFsCache();
   } catch (error) {
     console.error('\n[analyze-bundle] Build failed:', error.message);
     process.exit(1);
@@ -183,14 +135,13 @@ export function ensureFreshStats(forceRebuild, projectConfig = {}) {
 
 export function loadStats(distDir = DIST_DIR) {
   const statsFile = findStatsFile(distDir);
-  if (!statsFile || !fs.existsSync(statsFile)) {
+  if (!statsFile || !fileExists(statsFile)) {
     console.error(`\n[analyze-bundle] Error: Stats file not found inside ${distDir}`);
     process.exit(1);
   }
 
   try {
-    const raw = fs.readFileSync(statsFile, 'utf8');
-    return { stats: JSON.parse(raw), statsFile };
+    return { stats: readJsonFile(statsFile), statsFile };
   } catch (error) {
     console.error('\n[analyze-bundle] Error parsing stats JSON:', error.message);
     process.exit(1);
@@ -259,10 +210,11 @@ export function categorizeInput(inputPath, relSourceRoot = 'src') {
 }
 
 export function getEmbeddedStylesSummary(chunkPath, chunkBytes) {
-  if (!fs.existsSync(chunkPath) || chunkBytes <= 0) {
+  const chunkContent = chunkBytes > 0 ? readTextFile(chunkPath) : null;
+  if (!chunkContent) {
     return null;
   }
-  const arrayMatches = fs.readFileSync(chunkPath, 'utf8').matchAll(/styles:\s*\[((?:`[^`]*`|"[^"]*"|'[^']*'|\s|,)+)\]/g);
+  const arrayMatches = chunkContent.matchAll(/styles:\s*\[((?:`[^`]*`|"[^"]*"|'[^']*'|\s|,)+)\]/g);
   let stylesTotal = 0;
   let propertyBytes = 0;
 
@@ -291,8 +243,8 @@ function isAngularComponentFile(inputPath, relSourceRoot = 'src') {
   if (!inputPath.startsWith(appPrefix) || !inputPath.endsWith('.ts') || rootAppFiles.has(inputPath)) {
     return false;
   }
-  const fullPath = path.join(rootDir, inputPath);
-  return fs.existsSync(fullPath) && fs.readFileSync(fullPath, 'utf8').includes('@Component(');
+  const content = readTextFile(path.join(rootDir, inputPath));
+  return Boolean(content && content.includes('@Component('));
 }
 
 function recordPackageLeak(packageLeaks, inputPath, bytes) {
@@ -320,15 +272,10 @@ export function detectLeakedDependencies(inputEntries, relSourceRoot = 'src') {
   const eagerComponents = [];
 
   for (const [inputPath, val] of inputEntries) {
-    if (val.bytesInOutput <= 0) {
-      continue;
-    }
-
+    if (val.bytesInOutput <= 0) continue;
     if (isAngularComponentFile(inputPath, relSourceRoot)) {
       eagerComponents.push({
-        type: 'Eager Component in Main',
-        path: inputPath,
-        bytes: val.bytesInOutput,
+        type: 'Eager Component in Main', path: inputPath, bytes: val.bytesInOutput,
         advice: 'Verify this component belongs on the initial startup view; lazy-load secondary routes via loadComponent or @defer.',
       });
     } else if (inputPath.startsWith('node_modules/')) {

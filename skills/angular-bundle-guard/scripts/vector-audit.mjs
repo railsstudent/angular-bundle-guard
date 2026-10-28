@@ -1,6 +1,6 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { detectLeakedDependencies, formatBytes, rootDir } from './bundle-utils.mjs';
+import { fileExists } from './fs-utils.mjs';
 import {
   collectInjectAsyncCalls,
   findChainedInjectAsyncCalls,
@@ -37,7 +37,7 @@ function auditVector1MixedBarrels({ injectCalls, tsFiles, mainInputs, aliasConfi
   const seen = new Set();
   for (const call of injectCalls) {
     const asIndexAbs = path.join(rootDir, call.resolvedRel, 'index.ts');
-    if (fs.existsSync(asIndexAbs)) {
+    if (fileExists(asIndexAbs)) {
       findings.push({
         location: `${call.callerRel}:${call.line}`,
         detail: `injectAsync() imports barrel "${call.specifier}" (${path.join(call.resolvedRel, 'index.ts')}) instead of a direct file path, emitting an extra barrel wrapper chunk.`,

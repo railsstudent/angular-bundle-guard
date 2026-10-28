@@ -1,6 +1,6 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { formatBytes, rootDir } from './bundle-utils.mjs';
+import { readJsonFile } from './fs-utils.mjs';
 
 export function getLineNumber(content, index) {
   return content.slice(0, index).split('\n').length;
@@ -8,12 +8,11 @@ export function getLineNumber(content, index) {
 
 export function loadTsConfigPathAliases() {
   const tsconfigPath = path.join(rootDir, 'tsconfig.json');
-  if (!fs.existsSync(tsconfigPath)) {
-    return { baseUrl: '.', paths: {} };
-  }
   try {
-    const cleaned = fs.readFileSync(tsconfigPath, 'utf8').replace(/\/\*[\s\S]*?\*\/|^\s*\/\/.*$/gm, '');
-    const parsed = JSON.parse(cleaned);
+    const parsed = readJsonFile(tsconfigPath, { stripComments: true });
+    if (!parsed) {
+      return { baseUrl: '.', paths: {} };
+    }
     const co = parsed.compilerOptions || {};
     return { baseUrl: co.baseUrl || '.', paths: co.paths || {} };
   } catch {

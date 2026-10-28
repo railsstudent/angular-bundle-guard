@@ -175,9 +175,7 @@ function auditL2SequentialDownloads({ allCodeFiles, tsFiles, injectCalls, mainIn
   const findings = [];
 
   for (const call of injectCalls) {
-    if (!deferredPaths.has(call.callerRel)) {
-      continue;
-    }
+    if (!deferredPaths.has(call.callerRel)) continue;
     const targetFile = tsByRel.get(`${call.resolvedRel}.ts`);
     if (targetFile && !hasExternalSdkImport(targetFile.content)) {
       findings.push({
@@ -188,12 +186,9 @@ function auditL2SequentialDownloads({ allCodeFiles, tsFiles, injectCalls, mainIn
     }
   }
 
-  const mainRelSet = new Set(
-    mainInputs.filter(([, v]) => v.bytesInOutput > 0).map(([p]) => path.normalize(p)),
-  );
+  const mainRelSet = new Set(mainInputs.filter(([, v]) => v.bytesInOutput > 0).map(([p]) => path.normalize(p)));
   const lazyCalls = mainRelSet.size > 0 ? injectCalls.filter((c) => !mainRelSet.has(c.callerRel)) : [];
-  const lazyFiles =
-    mainRelSet.size > 0 ? tsFiles.filter((f) => !mainRelSet.has(path.relative(rootDir, f.file))) : [];
+  const lazyFiles = mainRelSet.size > 0 ? tsFiles.filter((f) => !mainRelSet.has(path.relative(rootDir, f.file))) : [];
 
   return [
     ...findings,
@@ -283,21 +278,18 @@ export function getLazyVectorAudit({ allCodeFiles, outputEntries = [], mainInput
 
   return [
     {
-      id: 'L1',
-      name: '1. Bloated Lazy Route / @defer Chunk',
+      id: 'L1', name: '1. Bloated Lazy Route / @defer Chunk',
       findings: [
         ...auditL1SdkInLazyComponentChunks({ outputEntries, tsFiles, deferredPaths, relSourceRoot }),
         ...auditL1UnwrappedIfChildrenInLazyRoutes({ allCodeFiles, tsFiles, aliasConfig }),
       ],
     },
     {
-      id: 'L2',
-      name: '2. Sequential Lazy Chunk Downloads',
+      id: 'L2', name: '2. Sequential Lazy Chunk Downloads',
       findings: auditL2SequentialDownloads({ allCodeFiles, tsFiles, injectCalls, mainInputs }),
     },
     {
-      id: 'L3',
-      name: '3. Shared Lazy Chunk & Barrel Leaks',
+      id: 'L3', name: '3. Shared Lazy Chunk & Barrel Leaks',
       findings: auditL3SharedLazyAndBarrelLeaks({ outputEntries, tsFiles, aliasConfig }),
     },
   ];
