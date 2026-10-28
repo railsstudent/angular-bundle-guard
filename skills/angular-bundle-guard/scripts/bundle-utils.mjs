@@ -262,19 +262,18 @@ export function getEmbeddedStylesSummary(chunkPath, chunkBytes) {
   if (!fs.existsSync(chunkPath) || chunkBytes <= 0) {
     return null;
   }
-  const matches = fs.readFileSync(chunkPath, 'utf8').match(/styles:\s*\[`[^`]+`\]/g) || [];
+  const arrayMatches = fs.readFileSync(chunkPath, 'utf8').matchAll(/styles:\s*\[((?:`[^`]*`|"[^"]*"|'[^']*'|\s|,)+)\]/g);
   let stylesTotal = 0;
-  let rulesBytes = 0;
   let propertyBytes = 0;
 
-  for (const m of matches) {
-    stylesTotal += m.length;
-    const propIdx = m.indexOf('@property');
-    if (propIdx !== -1) {
-      rulesBytes += propIdx;
-      propertyBytes += m.length - propIdx;
-    } else {
-      rulesBytes += m.length;
+  for (const arrMatch of arrayMatches) {
+    for (const strMatch of arrMatch[1].matchAll(/`([^`]*)`|"([^"]*)"|'([^']*)'/g)) {
+      const m = strMatch[1] ?? strMatch[2] ?? strMatch[3] ?? '';
+      stylesTotal += m.length;
+      const propIdx = m.indexOf('@property');
+      if (propIdx !== -1) {
+        propertyBytes += m.length - propIdx;
+      }
     }
   }
 
@@ -282,7 +281,7 @@ export function getEmbeddedStylesSummary(chunkPath, chunkBytes) {
     return null;
   }
   const pct = ((stylesTotal / chunkBytes) * 100).toFixed(1);
-  return `${formatBytes(stylesTotal)} (${pct}% of chunk) [Rules: ${formatBytes(rulesBytes)}, Tailwind @property: ${formatBytes(propertyBytes)}]`;
+  return `${formatBytes(stylesTotal)} (${pct}% of chunk) [Tailwind @property overhead: ${formatBytes(propertyBytes)}]`;
 }
 
 function isAngularComponentFile(inputPath, relSourceRoot = 'src') {

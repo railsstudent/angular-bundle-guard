@@ -13,6 +13,7 @@ import {
   resolveProjectConfig,
 } from './bundle-utils.mjs';
 import { getCssAnalysis, getSourceFiles } from './css-audit.mjs';
+import { buildComponentCssRows, isComponentCssOutput } from './component-css-calc.mjs';
 import { computeProjectHash, readCachedReport, writeHtmlReport } from './html-report.mjs';
 import { getLazyVectorAudit } from './lazy-vector-audit.mjs';
 import { getVectorAudit } from './vector-audit.mjs';
@@ -170,11 +171,11 @@ function runCssOptimizationAudit(projectConfig, allCodeFiles, reportPath) {
   return cssAnalysis;
 }
 
-function buildHtmlChunkRows(outputEntries, statsFile) {
+function buildHtmlChunkRows(outputEntries, statsFile, projectConfig) {
   const statsDir = path.dirname(statsFile);
   const browserDir = fs.existsSync(path.join(statsDir, 'browser')) ? path.join(statsDir, 'browser') : statsDir;
   return [...outputEntries]
-    .filter(([name]) => name.endsWith('.js') || name.endsWith('.css'))
+    .filter(([name, data]) => name.endsWith('.js') || (name.endsWith('.css') && !isComponentCssOutput(name, data, projectConfig)))
     .sort((a, b) => b[1].bytes - a[1].bytes)
     .map(([name, data]) => {
       const topInputs = Object.entries(data.inputs || {})
@@ -238,13 +239,14 @@ function executeFullAudit(projectConfig, hash, reportPath) {
   const auditResults = runAuditsAndCollectData({ allCodeFiles, outputEntries, inputEntries, projectConfig, reportPath });
   console.log = origLog;
   const summaryText = logLines.join('\n');
-  const chunks = buildHtmlChunkRows(outputEntries, statsFile);
+  const chunks = buildHtmlChunkRows(outputEntries, statsFile, projectConfig);
+  const componentCss = buildComponentCssRows({ outputEntries, statsFile, projectConfig, allCodeFiles });
   writeHtmlReport({
     reportPath,
     hash,
     projectConfig,
     summaryText,
-    auditData: { chunks, ...auditResults },
+    auditData: { chunks, componentCss, ...auditResults },
   });
   console.log(`[HTML Report] Generated: ${reportPath}\n`);
 }
