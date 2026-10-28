@@ -40,7 +40,7 @@ Compare current initial sizes against the previous build size:
 When an increase is a leak, when auditing lazy chunks, or when asked how to reduce bundle size, apply these rules:
 
 1. **Zero-File-Read Audit Rule (Sole Source of Truth: `analyze-bundle.mjs` Stdout)**:
-   - `analyze-bundle.mjs` automatically audits all **8 Initial Bundle Vectors**, all **3 Lazy Chunk Vectors**, all **4 Component CSS & Dead Class categories**, and **Leak Detection** in a single pass.
+   - `analyze-bundle.mjs` automatically audits all **8 Initial Bundle Vectors**, all **3 Lazy Chunk Vectors**, all **4 Component CSS & Dead Class categories** (`1. Dead / Unused CSS & Vanilla Rules`, `2. Short Static @apply Classes (<= 3 utilities)`, `3. Partial Static Splits`, and `4. Duplicate @apply & @keyframes Rules`), and **Leak Detection** in a single pass.
    - During the audit phase (Steps 1–4), **never call file-reading tools (`read_file`, `grep`, etc.) on any file in `src/`, `dist/`, or `<tmpdir>`**.
    - Only read [`references/audit-reference.md`](references/audit-reference.md) if `analyze-bundle.mjs` reports `⚠️` issues on a vector or after the user approves fixes in Step 4.
    - Only read `src/` files **after** the user approves the implementation plan in Step 4.

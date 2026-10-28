@@ -68,7 +68,7 @@ function buildThemeTokenUtilityRegex(tokenName) {
   return new RegExp(`(?:(?<![a-zA-Z0-9_-])|:)(?:${utilPattern}|${tokenName})(?![a-zA-Z0-9_-])`);
 }
 
-function getSuggestedThemeUtility(utilPrefix, varName, themeTokens) {
+export function getSuggestedThemeUtility(utilPrefix, varName, themeTokens) {
   if (!themeTokens.has(varName)) {
     return null;
   }
@@ -81,12 +81,14 @@ function getSuggestedThemeUtility(utilPrefix, varName, themeTokens) {
     '--font-',
     '--spacing-',
     '--container-',
+    '--shadow-',
   ];
   const matched = stripPrefixes.find((p) => varName.startsWith(p));
   if (!matched) {
     return null;
   }
-  return `${utilPrefix}-${varName.slice(matched.length)}`;
+  const normalizedPrefix = utilPrefix === '--tw-ring-color' || utilPrefix === 'ring-color' ? 'ring' : utilPrefix === 'box-shadow' ? 'shadow' : utilPrefix;
+  return `${normalizedPrefix}-${varName.slice(matched.length)}`;
 }
 
 function extractThemeTokensFromGlobalFiles(globalFiles, cssByRelPath) {
@@ -200,11 +202,96 @@ function findParenthesizedVarIssues(activeFiles, themeTokens, definedVars) {
   return findings;
 }
 
-export function auditThemeTokensAndVars({ globalFiles, cssByRelPath, activeFiles }) {
+const PROP_TO_UTIL_PREFIX = {
+  background: 'bg',
+  'background-color': 'bg',
+  color: 'text',
+  'border-color': 'border',
+  'box-shadow': 'shadow',
+  '--tw-ring-color': 'ring',
+  'font-family': 'font',
+};
+
+export function stripKeyframesBlocks(clean) {
+  return clean.replace(/@keyframes\s+[a-zA-Z0-9_-]+\s*\{(?:[^{}]|\{[^{}]*\})*\}/g, (m) => m.replace(/[^\n]/g, ' '));
+}
+
+function isExcludedVanillaRule(selector, prop, val, validCustomKeyframes) {
+  if (/::-(?:webkit|ms)-|:-(?:webkit|ms)-/.test(selector)) {
+    return true;
+  }
+  if (/^-(?:webkit|ms)-/.test(prop) || prop === 'scrollbar-width') {
+    return true;
+  }
+  if (/(?:radial|linear)-gradient\(/.test(val)) {
+    return true;
+  }
+  if ((prop === 'animation' || prop === 'animation-name') && validCustomKeyframes) {
+    return val.split(/[\s,]+/).some((t) => validCustomKeyframes.has(t));
+  }
+  return false;
+}
+
+function buildVanillaDeclarationFinding({ loc, selector, prop, val, themeTokens }) {
+  const rawDecl = `${prop}: ${val}`;
+  const displaySelector = `${selector} -> ${rawDecl}`;
+  const singleVarMatch = val.match(/^var\((--[a-zA-Z0-9_-]+)\)$/);
+  const utilPrefix = PROP_TO_UTIL_PREFIX[prop] || prop;
+  const suggested = singleVarMatch ? getSuggestedThemeUtility(utilPrefix, singleVarMatch[1], themeTokens) : null;
+
+  let action = 'Convert vanilla CSS to Tailwind utility in .html (or @apply)';
+  let estBytes = 40;
+  if (suggested) {
+    estBytes = 45;
+    const baseSelector = selector
+      .split(',')
+      .map((s) => s.replace(/:host-context\(\.dark\)\s*/g, '').trim())
+      .join(', ');
+    action = selector.includes(':host-context(.dark)')
+      ? `Fold 'dark:${suggested}' into base '${baseSelector}' rule and delete this :host-context(.dark) block`
+      : `Replace with '@apply ${suggested}' or move to .html`;
+  } else if (prop === 'backdrop-filter' || prop === 'filter') {
+    estBytes = 45;
+    action = 'Convert to Tailwind utility in .html (avoid @apply in component .css, which injects ~1.2 KB @property boilerplate)';
+  }
+
+  return {
+    relPath: loc, selector: displaySelector, className: rawDecl, estBytes,
+    specRefs: '', cssApplyRefs: '', action,
+    themeIssueAction: suggested ? `<code>${action}</code>` : action,
+  };
+}
+
+export function findVanillaCssAndVarIssues({ activeFiles, globalFiles, themeTokens, validCustomKeyframes = new Set() }) {
+  const findings = [];
+  for (const f of activeFiles) {
+    const relPath = path.relative(rootDir, f.file);
+    if (!f.file.endsWith('.css') || globalFiles.has(relPath)) continue;
+    const clean = stripKeyframesBlocks(f.content.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' ')));
+    for (const ruleMatch of clean.matchAll(/([^{};]+)\{([^{}]+)\}/g)) {
+      const selector = ruleMatch[1].trim().replace(/\s+/g, ' ');
+      if (selector.startsWith('@')) continue;
+      const bodyStart = ruleMatch.index + ruleMatch[0].indexOf('{') + 1;
+      const bodyNoApply = ruleMatch[2].replace(/@apply\s+[^;{}]+;?/g, (m) => m.replace(/[^\n]/g, ' '));
+      for (const declMatch of bodyNoApply.matchAll(/(?:^|[;\n])\s*([a-zA-Z_-]+)\s*:\s*([^;{}]+)/g)) {
+        const prop = declMatch[1].trim();
+        const val = declMatch[2].trim();
+        if (isExcludedVanillaRule(selector, prop, val, validCustomKeyframes)) continue;
+        const propOffset = declMatch.index + declMatch[0].indexOf(declMatch[1]);
+        const line = clean.slice(0, bodyStart + propOffset).split('\n').length;
+        findings.push(buildVanillaDeclarationFinding({ loc: `${relPath}:${line}`, selector, prop, val, themeTokens }));
+      }
+    }
+  }
+  return findings;
+}
+
+export function auditThemeTokensAndVars({ globalFiles, cssByRelPath, activeFiles, validCustomKeyframes = new Set() }) {
   const themeTokens = extractThemeTokensFromGlobalFiles(globalFiles, cssByRelPath);
   const definedVars = collectDefinedCssVariables(activeFiles);
   return [
     ...findUnusedThemeTokens(themeTokens, activeFiles),
     ...findParenthesizedVarIssues(activeFiles, themeTokens, definedVars),
+    ...findVanillaCssAndVarIssues({ activeFiles, globalFiles, themeTokens, validCustomKeyframes }),
   ];
 }

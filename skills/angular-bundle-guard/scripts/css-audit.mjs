@@ -2,13 +2,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { rootDir } from './bundle-utils.mjs';
 import { processApplyRule } from './css-apply-rules.mjs';
-import { findDuplicatesInSameFile, findIdenticalRulesAcrossFiles } from './css-duplicates.mjs';
-import { auditThemeTokensAndVars, getPostcssBaseRecommendation } from './css-theme-audit.mjs';
+import {
+  extractAndAuditKeyframes,
+  findDuplicateKeyframesAcrossFiles,
+  findDuplicatesInSameFile,
+  findIdenticalRulesAcrossFiles,
+} from './css-duplicates.mjs';
+import { auditThemeTokensAndVars, getPostcssBaseRecommendation, stripKeyframesBlocks } from './css-theme-audit.mjs';
 
 export function getSourceFiles(dir, extList) {
-  if (!fs.existsSync(dir)) {
-    return [];
-  }
+  if (!fs.existsSync(dir)) return [];
   return fs
     .readdirSync(dir, { recursive: true, withFileTypes: true })
     .filter((e) => e.isFile() && extList.some((ext) => e.name.endsWith(ext)))
@@ -20,38 +23,25 @@ function extractSelectorClassNames(selector) {
     const utilName = selector.replace('@utility', '').trim();
     return utilName ? [utilName] : [];
   }
-  const withoutHostContext = selector
-    .replace(/:host-context\([^)]*\)/g, ' ')
-    .replace(/:host\([^)]*\)/g, ' ');
-  return [...new Set([...withoutHostContext.matchAll(/\.([a-zA-Z0-9_-]+)/g)].map((m) => m[1]))];
+  const withoutHost = selector.replace(/:host(?:-context)?\([^)]*\)/g, ' ');
+  return [...new Set([...withoutHost.matchAll(/\.([a-zA-Z0-9_-]+)/g)].map((m) => m[1]))];
 }
 
 function seedGlobalCssSet(cssByRelPath, projectConfig = {}) {
-  const configured = (projectConfig.globalStyles || [])
-    .map((s) => path.normalize(s))
-    .filter((s) => cssByRelPath.has(s));
-  if (configured.length > 0) {
-    return new Set(configured);
-  }
-  const relSourceRoot = projectConfig.relSourceRoot || 'src';
-  const appPrefix = `${path.join(relSourceRoot, 'app')}${path.sep}`;
+  const configured = (projectConfig.globalStyles || []).map((s) => path.normalize(s)).filter((s) => cssByRelPath.has(s));
+  if (configured.length > 0) return new Set(configured);
+  const appPrefix = `${path.join(projectConfig.relSourceRoot || 'src', 'app')}${path.sep}`;
   return new Set([...cssByRelPath.keys()].filter((rel) => !rel.startsWith(appPrefix)));
 }
 
 function collectGlobalCssFiles(allCodeFiles, projectConfig = {}) {
-  const cssByRelPath = new Map(
-    allCodeFiles
-      .filter((f) => f.file.endsWith('.css'))
-      .map((f) => [path.relative(rootDir, f.file), f]),
-  );
+  const cssByRelPath = new Map(allCodeFiles.filter((f) => f.file.endsWith('.css')).map((f) => [path.relative(rootDir, f.file), f]));
   const globalFiles = seedGlobalCssSet(cssByRelPath, projectConfig);
   const queue = [...globalFiles];
   while (queue.length > 0) {
     const currentRel = queue.shift();
     const fileObj = cssByRelPath.get(currentRel);
-    if (!fileObj) {
-      continue;
-    }
+    if (!fileObj) continue;
     for (const match of fileObj.content.matchAll(/@import\s+['"](\.[^'"]+)['"]/g)) {
       const resolvedRel = path.normalize(path.join(path.dirname(currentRel), match[1]));
       const withExt = resolvedRel.endsWith('.css') ? resolvedRel : `${resolvedRel}.css`;
@@ -69,10 +59,8 @@ function getGlobalCssMeta(allCodeFiles, projectConfig = {}) {
   const globalClassNames = new Set();
   for (const relPath of globalFiles) {
     const globalFile = cssByRelPath.get(relPath);
-    if (!globalFile) {
-      continue;
-    }
-    const clean = globalFile.content.replace(/\/\*[\s\S]*?\*\//g, ' ');
+    if (!globalFile) continue;
+    const clean = stripKeyframesBlocks(globalFile.content.replace(/\/\*[\s\S]*?\*\//g, ' '));
     for (const match of clean.matchAll(/([^{};]+)\{[^{}]+\}/g)) {
       const selector = match[1].trim();
       if (!selector.startsWith('@') || selector.startsWith('@utility')) {
@@ -93,8 +81,12 @@ function matchLineRefs(regex, files) {
     .join(', ');
 }
 
+function buildClassTokenRegex(className) {
+  return new RegExp(`(?<![a-zA-Z0-9_/-])${className}(?![a-zA-Z0-9_-]|\\.(?:component|directive|pipe|service|module|html|css|scss|ts|spec)\\b)`);
+}
+
 function findFileLineRefs(className, files) {
-  return matchLineRefs(new RegExp(`(?<![a-zA-Z0-9_-])${className}(?![a-zA-Z0-9_-])`), files);
+  return matchLineRefs(buildClassTokenRegex(className), files);
 }
 
 function findCssApplyRefs(className, cssFiles) {
@@ -110,7 +102,7 @@ function isClassUsedByPrefix(cls, files) {
 }
 
 function isClassUsedInState(cls, isUtility, state) {
-  const wordRegex = new RegExp(`(?<![a-zA-Z0-9_-])${cls}(?![a-zA-Z0-9_-])`);
+  const wordRegex = buildClassTokenRegex(cls);
   const sameFileApplyRegex = new RegExp(`@apply\\b[^;]*(?<![a-zA-Z0-9_-])${cls}(?![a-zA-Z0-9_-])`);
   return (
     state.siblingRuntimeFiles.some((f) => wordRegex.test(f.content)) ||
@@ -137,7 +129,7 @@ function findDeadClassesInRule({ selector, classNames, bodyLength, relPath, stat
 
 function findMultiRuleClasses(clean) {
   const counts = new Map();
-  for (const match of clean.matchAll(/([^{};]+)\{[^{}]+\}/g)) {
+  for (const match of stripKeyframesBlocks(clean).matchAll(/([^{};]+)\{[^{}]+\}/g)) {
     const selector = match[1].trim();
     if (!selector.startsWith('@') || selector.startsWith('@utility')) {
       for (const cls of new Set(extractSelectorClassNames(selector))) {
@@ -215,14 +207,15 @@ function findConditionalRuleOffsets(clean) {
 }
 
 function scanCssRules(clean, relPath, state) {
-  const conditionalOffsets = findConditionalRuleOffsets(clean);
-  for (const match of clean.matchAll(/([^{};]+)\{([^{}]+)\}/g)) {
+  const noKeyframes = stripKeyframesBlocks(clean);
+  const conditionalOffsets = findConditionalRuleOffsets(noKeyframes);
+  for (const match of noKeyframes.matchAll(/([^{};]+)\{([^{}]+)\}/g)) {
     const selector = match[1].trim();
     const body = match[2].trim();
     if (selector.startsWith('@') && !selector.startsWith('@utility')) {
       continue;
     }
-    const line = clean.slice(0, match.index + match[1].search(/\S/)).split('\n').length;
+    const line = noKeyframes.slice(0, match.index + match[1].search(/\S/)).split('\n').length;
     const loc = `${relPath}:${line}`;
     const deadInRule = findDeadClassesInRule({
       selector,
@@ -246,23 +239,15 @@ function scanCssFile({ cssFile, allCodeFiles, allRuntimeFiles, globalCssMeta }) 
 
   if (!state.isGlobal && !state.hasReferencingComponent) {
     state.deadClasses.push({
-      relPath: `${relPath}:1`,
-      selector: '(entire file)',
-      className: base,
-      estBytes: clean.length,
-      specRefs: '',
-      cssApplyRefs: '',
-      isOrphanFile: true,
+      relPath: `${relPath}:1`, selector: '(entire file)', className: base,
+      estBytes: clean.length, specRefs: '', cssApplyRefs: '', isOrphanFile: true,
     });
   } else {
     scanCssRules(clean, relPath, state);
   }
-
   return {
-    deadClasses: state.deadClasses,
-    shortStaticRules: state.shortStaticRules,
-    partialStaticRules: state.partialStaticRules,
-    remainingApplyRules: state.remainingApplyRules,
+    deadClasses: state.deadClasses, shortStaticRules: state.shortStaticRules,
+    partialStaticRules: state.partialStaticRules, remainingApplyRules: state.remainingApplyRules,
     duplicateRules: findDuplicatesInSameFile(state),
   };
 }
@@ -273,13 +258,22 @@ export function getCssAnalysis(cssFiles, allCodeFiles, projectConfig = {}) {
   const activeFiles = allCodeFiles.filter(
     (f) => !f.file.endsWith('.spec.ts') && (!f.file.endsWith('.css') || isActiveCssFile(f.file, allCodeFiles, globalCssMeta.globalFiles)),
   );
+  const activeCssFiles = activeFiles.filter((f) => f.file.endsWith('.css'));
+  const { allKeyframes, globalUtilitiesByKeyframe, deadKeyframes, validCustomKeyframes } = extractAndAuditKeyframes(
+    activeCssFiles,
+    globalCssMeta.globalFiles,
+  );
   const result = {
     postcssRecommendation: getPostcssBaseRecommendation(projectConfig),
-    deadClasses: auditThemeTokensAndVars({
-      globalFiles: globalCssMeta.globalFiles,
-      cssByRelPath: globalCssMeta.cssByRelPath,
-      activeFiles,
-    }),
+    deadClasses: [
+      ...auditThemeTokensAndVars({
+        globalFiles: globalCssMeta.globalFiles,
+        cssByRelPath: globalCssMeta.cssByRelPath,
+        activeFiles,
+        validCustomKeyframes,
+      }),
+      ...deadKeyframes,
+    ],
     shortStaticRules: [],
     partialStaticRules: [],
     duplicateRules: [],
@@ -293,6 +287,9 @@ export function getCssAnalysis(cssFiles, allCodeFiles, projectConfig = {}) {
     result.duplicateRules.push(...r.duplicateRules);
     allRemainingRules.push(...r.remainingApplyRules);
   }
-  result.duplicateRules.push(...findIdenticalRulesAcrossFiles(allRemainingRules));
+  result.duplicateRules.push(
+    ...findIdenticalRulesAcrossFiles(allRemainingRules),
+    ...findDuplicateKeyframesAcrossFiles(allKeyframes, globalUtilitiesByKeyframe),
+  );
   return result;
 }

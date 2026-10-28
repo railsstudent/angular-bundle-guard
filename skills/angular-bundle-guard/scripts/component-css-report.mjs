@@ -160,7 +160,7 @@ export function renderCssSections(cssAnalysis = {}, helpers) {
   } = cssAnalysis;
   const postcssBanner = postcssRecommendation ? `<p>💡 <strong>${escapeHtml(postcssRecommendation)}</strong></p>` : '';
   return `${postcssBanner}<details open>
-      <summary>1. Dead / Unused CSS Classes (${deadClasses.length})</summary>
+      <summary>1. Dead / Unused CSS &amp; Vanilla Rules (${deadClasses.length})</summary>
       ${renderDeadCssTable(deadClasses, helpers)}
     </details>
     <details open>
@@ -172,7 +172,7 @@ export function renderCssSections(cssAnalysis = {}, helpers) {
       ${renderPartialStaticTable(partialStaticRules, helpers)}
     </details>
     <details open>
-      <summary>4. Duplicate @apply Rules (${duplicateRules.length})</summary>
+      <summary>4. Duplicate @apply &amp; @keyframes Rules (${duplicateRules.length})</summary>
       ${renderDuplicateRulesTable(duplicateRules, helpers)}
     </details>`;
 }

@@ -1,3 +1,72 @@
+import path from 'node:path';
+import { rootDir } from './bundle-utils.mjs';
+
+const BUILTIN_KEYFRAMES = new Set(['spin', 'pulse', 'ping', 'bounce']);
+
+function hasAnimationReference(name, cleanCssList) {
+  const animRegex = new RegExp(`animation(?:-name)?\\s*:[^;{}]*(?<![a-zA-Z0-9_-])${name}(?![a-zA-Z0-9_-])`);
+  return cleanCssList.some((c) => animRegex.test(c));
+}
+
+export function extractAndAuditKeyframes(activeCssFiles, globalFiles) {
+  const allKeyframes = [];
+  const globalUtilitiesByKeyframe = new Map();
+  const cleanByRel = new Map();
+
+  for (const f of activeCssFiles) {
+    const rel = path.relative(rootDir, f.file);
+    const isGlobal = globalFiles.has(rel);
+    const clean = f.content.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
+    for (const m of clean.matchAll(/@keyframes\s+([a-zA-Z0-9_-]+)\s*\{((?:[^{}]|\{[^{}]*\})*)\}/g)) {
+      const line = clean.slice(0, m.index).split('\n').length;
+      allKeyframes.push({ name: m[1], relPath: `${rel}:${line}`, fileRel: rel, isGlobal, bodyLen: m[0].length });
+    }
+    const stripped = clean.replace(/@keyframes\s+[a-zA-Z0-9_-]+\s*\{(?:[^{}]|\{[^{}]*\})*\}/g, (m) => m.replace(/[^\n]/g, ' '));
+    cleanByRel.set(rel, stripped);
+    if (isGlobal) {
+      for (const um of stripped.matchAll(/@utility\s+([a-zA-Z0-9_-]+)\s*\{([^{}]*)\}/g)) {
+        for (const am of um[2].matchAll(/animation(?:-name)?\s*:\s*([^;{}]+)/g)) {
+          am[1].split(/[\s,]+/).filter(Boolean).forEach((t) => globalUtilitiesByKeyframe.set(t, um[1]));
+        }
+      }
+    }
+  }
+
+  const counts = new Map();
+  allKeyframes.forEach((k) => counts.set(k.name, (counts.get(k.name) || 0) + 1));
+  const allCleanList = [...cleanByRel.values()];
+  const deadKeyframes = [];
+  const validCustomKeyframes = new Set();
+
+  for (const kf of allKeyframes) {
+    const isCollision = !kf.isGlobal && BUILTIN_KEYFRAMES.has(kf.name);
+    const isReferenced = hasAnimationReference(kf.name, kf.isGlobal ? allCleanList : [cleanByRel.get(kf.fileRel) || '']);
+    if (isCollision || !isReferenced) {
+      const reason = isCollision
+        ? `Collides with Tailwind built-in animate-${kf.name}`
+        : 'Unused @keyframes (never referenced by animation)';
+      const action = isCollision
+        ? `Delete '@keyframes ${kf.name}' and use Tailwind 'animate-${kf.name}' in .html`
+        : 'Delete unused @keyframes block';
+      deadKeyframes.push({
+        relPath: kf.relPath,
+        selector: `@keyframes ${kf.name}`,
+        className: `@keyframes ${kf.name}`,
+        reason,
+        action,
+        themeIssueAction: `<strong>${reason}:</strong> ${action}.`,
+        estBytes: Math.max(90, kf.bodyLen),
+        specRefs: '',
+        cssApplyRefs: '',
+      });
+    } else if (counts.get(kf.name) === 1) {
+      validCustomKeyframes.add(kf.name);
+    }
+  }
+
+  return { allKeyframes, globalUtilitiesByKeyframe, deadKeyframes, validCustomKeyframes };
+}
+
 function compareTwoRulesInSameFile({ a, b, state }) {
   const shared = a.utilities.filter((u) => b.utilities.includes(u));
   if (shared.length < 5 || shared.length < Math.min(a.utilities.length, b.utilities.length) - 1) {
@@ -109,6 +178,42 @@ export function findIdenticalRulesAcrossFiles(remainingRules) {
       htmlLocations: group.map((r) => r.htmlLocations).filter(Boolean).join(', '),
       specRefs: group.map((r) => r.specRefs).filter(Boolean).join(', '),
       estBytes: (group.length - 1) * Math.max(60, utils.length * 120),
+    });
+  }
+  return duplicates;
+}
+
+export function findDuplicateKeyframesAcrossFiles(allKeyframes, globalUtilitiesByKeyframe = new Map()) {
+  const groups = new Map();
+  for (const kf of allKeyframes) {
+    const list = groups.get(kf.name) || [];
+    list.push(kf);
+    groups.set(kf.name, list);
+  }
+  const duplicates = [];
+  for (const [name, occurrences] of groups.entries()) {
+    if (occurrences.length <= 1) {
+      continue;
+    }
+    const hasGlobal = occurrences.some((o) => o.isGlobal);
+    const utilName = hasGlobal ? globalUtilitiesByKeyframe.get(name) : null;
+    const hint = utilName
+      ? `Delete component '@keyframes ${name}' and 'animation: ${name}...' line; use global '${utilName}' utility in .html`
+      : `Consolidate duplicate '@keyframes ${name}' into src/styles.css and delete component copies`;
+    duplicates.push({
+      relPath: occurrences.map((o) => o.relPath).join(', '),
+      selectors: `@keyframes ${name}`,
+      signature: utilName ? `@keyframes ${name} (${hint})` : `@keyframes ${name}`,
+      sharedCount: 1,
+      utilityCount: 1,
+      occurrences,
+      fixCss: utilName
+        ? `@utility ${utilName} /* in src/styles.css */`
+        : `@keyframes ${name} { ... } /* in src/styles.css */`,
+      unsharedHint: hint,
+      htmlLocations: '',
+      specRefs: '',
+      estBytes: (occurrences.length - 1) * 140,
     });
   }
   return duplicates;

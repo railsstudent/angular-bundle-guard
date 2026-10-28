@@ -120,7 +120,7 @@ function estimateShortRuleBytes(cssClassesToMoveToHtml) {
   );
 }
 
-function buildClassifiedResult({ base, isFullMove, utilities }) {
+function buildClassifiedResult({ base, isFullMove, utilities, hasNonApplyCss }) {
   const moveToHtml = utilities.join(' ');
   if (isFullMove) {
     return {
@@ -138,7 +138,7 @@ function buildClassifiedResult({ base, isFullMove, utilities }) {
     rule: {
       ...base,
       moveToHtml,
-      keepInCss: '(shared rule in CSS)',
+      keepInCss: hasNonApplyCss ? '(raw CSS declarations in rule)' : '(shared rule in CSS)',
       estBytes: utilities.length * 28,
     },
   };
@@ -188,7 +188,7 @@ export function classifyStaticApplyRule({ selector, utilities, relPath, state, h
         });
   }
   const base = { relPath, selector, className, htmlLocations: htmlEval.inlineableHtmlLocations, specRefs };
-  return buildClassifiedResult({ base, isFullMove, utilities });
+  return buildClassifiedResult({ base, isFullMove, utilities, hasNonApplyCss });
 }
 
 function recordRemainingComponentRule({ selector, utilities, relPath, state }) {
