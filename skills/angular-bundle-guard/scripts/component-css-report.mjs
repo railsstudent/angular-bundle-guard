@@ -50,7 +50,7 @@ export function renderComponentCssSection(componentCss = {}, helpers) {
   return `<details open>
       <summary>2. Component CSS Files &gt; 1 KB (${largeCount}${smallCount > 0 ? `, +${smallCount} &lt;= 1 KB` : ''})</summary>
       ${toggleBar}<table>
-        <thead><tr><th>Source CSS File</th><th>Compiled Size</th><th>Tailwind @property Overhead</th><th>@property-Triggering Utilities Found</th></tr></thead>
+        <thead><tr><th>Source CSS File</th><th>Compiled Size</th><th>Tailwind @property Overhead</th><th>Which @apply classes caused that</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </details>`;
