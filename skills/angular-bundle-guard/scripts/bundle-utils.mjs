@@ -152,7 +152,7 @@ export function ensureFreshStats(forceRebuild, projectConfig = {}) {
   }
 
   const projectTarget = projectName !== 'default' ? ` ${projectName}` : '';
-  const buildCmd =  `npx ng build${projectTarget} --stats-json --progress=false`;
+  const buildCmd = `npx ng build${projectTarget} --stats-json --progress=false`;
   console.log(`\n[analyze-bundle] ${reason}\n[analyze-bundle] Executing "${buildCmd}" to generate fresh stats...\n`);
   try {
     execSync(buildCmd, { cwd: rootDir, stdio: 'inherit', env: process.env });
